@@ -117,7 +117,20 @@ layer), reading `/light/events/data` and `/light/wvfm/data`:
   streams one raw `Event` at a time via `HasNext()`/`NextEvent()` — it must never hold more
   than one raw `Event` in memory at once, even though the resulting `EventAna` vector for a
   full run is fine to keep (each `EventAna` is far lighter than a raw `Event`: doubles instead
-  of 600 raw samples per channel).
+  of 600 raw samples per channel). **This is the only header that depends on ROOT I/O**
+  (`TFile.h`/`TTree.h`) — the reader/data-model layers stay ROOT-I/O-free by design; keep new
+  ROOT persistence code here, not in `Event`/`EventAna`/`WaveformAna`.
+  - `Dump(filename, treename="waveforms")` writes one TTree entry per (event, adc, channel)
+    waveform (so `NumEvents * 8 * 64` entries — e.g. 905 events → 463,360 entries) from the
+    already-computed `fEvents` (does **not** re-read the `Run` or call `process()` itself —
+    call `process()` first). Static branches: `event_id/l`, `event_number/I`, `trig_type/b`,
+    `sn/I`, `utime_ms/l`, `tai_ns/l`, `adc/I`, `channel/I`, `valid/O`, `clipped/O`. Analysis
+    variable branches are **discovered dynamically**: it unions every key across every
+    `WaveformAna::GetResults()` in `fEvents` first, creates one `Double_t` branch per distinct
+    key name (e.g. `mean/D`), then fills `NaN` for any waveform missing that particular key.
+    This means adding a new key to `WaveformAna::results` (e.g. `"rms"`) automatically
+    produces a new TTree column with zero changes to `Dump()` — don't hardcode key names here.
+    Empty `fEvents` still produces a valid (zero-entry) TTree rather than erroring.
 - `lib/NDLArLight.hpp` — umbrella header aggregating the above.
 - `macros/example_loop.C` — reference example for the raw reader: build a `Run` from
   an explicit file list, loop with `HasNext()`/`NextEvent()`, print metadata + first 5 samples
@@ -126,6 +139,10 @@ layer), reading `/light/events/data` and `/light/wvfm/data`:
   construct `Analysis analysis(run)`, call `process()`, then iterate
   `analysis.GetEvents()` printing metadata + `WaveformAna::GetMean()` for a couple of valid
   channels. Verified against a real file (905 events processed).
+- `macros/example_dump.C` — reference example for `Analysis::Dump`: build+process a `Run`,
+  call `analysis.Dump("analysis.root")`, then reopen the file and `tree->Print()` to show the
+  branch list, including the dynamically-created `mean` branch. Verified against a real file
+  (905 events → 463,360 TTree entries, 11 branches).
 
 Printing conventions: `Waveform::Print`, `EventMetadata::Print`, and `WaveformAna::Print` all
 use tabular (`<iomanip>`-aligned column) output, not free-form text — match this style for

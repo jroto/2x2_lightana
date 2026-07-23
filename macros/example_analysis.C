@@ -23,7 +23,9 @@ void example_analysis()
     };
 
     try {
-        ndlar_light::Run run(subrun_files);
+        ndlar_light::Run run("/pnfs/dune/scratch/users/jsoto/NDLAr_Run3/VBRscan_20260716/",
+                            1130);
+//        "mpd_run_data_2026_07_16_14_05_34_CST_001130_p00003.FLOW.hdf5);
         std::cout << "Run has " << run.NumSubruns() << " subrun(s), "
                   << run.TotalEvents() << " total events.\n";
 

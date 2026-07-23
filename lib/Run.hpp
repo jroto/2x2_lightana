@@ -59,14 +59,24 @@ public:
     /// for clarity/logging purposes but is not itself used to filter -
     /// bake the run number into `pattern` (see example above) so the
     /// matching logic stays fully caller-controlled.
-    Run(const std::string& directory, int runNumber, const std::regex& pattern)
+    Run(const std::string& directory, int runNumber)
         : fRunNumber(runNumber)
     {
+        ////   std::regex pattern(R"(.*_001130_p(\d+)\.FLOW\.hdf5)");
+        std::stringstream ss;
+        ss << std::setw(6) << std::setfill('0') << runNumber;
+        std::string patternString =
+            "mpd_run_data_*_CST_" +  ss.str() +
+            "_p\\d{5}\\.FLOW\\.hdf5";
+
+        std::regex pattern(patternString);
+
         fSubrunFiles = ScanDirectory(directory, pattern);
         if (fSubrunFiles.empty()) {
             throw std::runtime_error(
-                "Run: no files matching pattern found in '" + directory +
+                "Run: no files matching pattern found in '" + directory + patternString +
                 "' for run " + std::to_string(runNumber));
+            
         }
         Init();
     }
