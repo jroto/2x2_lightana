@@ -1,0 +1,20 @@
+# VSCode
+.vscode/
+
+# ROOT
+*.root
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# temporary files
+*.swp
+*~
+
+*.so
+*.d
+*.pcm
