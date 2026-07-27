@@ -17,13 +17,10 @@
 
 void example_analysis()
 {
-    std::vector<std::string> subrun_files = {
-        "/pnfs/dune/scratch/users/jsoto/NDLAr_Run3/VBRscan_20260716/"
-        "mpd_run_data_2026_07_16_14_05_34_CST_001130_p00003.FLOW.hdf5",
-    };
-
+    std::string path="/pnfs/dune/scratch/users/jsoto/NDLAr_Run3/VBRscan_20260716/";
+    int run_number = 1130;
     try {
-        ndlar_light::Run run(subrun_files);
+        ndlar_light::Run run(path, run_number);
         std::cout << "Run has " << run.NumSubruns() << " subrun(s), "
                   << run.TotalEvents() << " total events.\n";
 

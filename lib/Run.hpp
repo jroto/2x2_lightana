@@ -32,8 +32,10 @@
 
 #include <algorithm>
 #include <dirent.h>
+#include <iomanip>
 #include <memory>
 #include <regex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -65,9 +67,12 @@ public:
         ////   std::regex pattern(R"(.*_001130_p(\d+)\.FLOW\.hdf5)");
         std::stringstream ss;
         ss << std::setw(6) << std::setfill('0') << runNumber;
+        // NOTE: the subrun index (\d+) must stay inside a capture group -
+        // ScanDirectory() uses that group to read the subrun index for
+        // sorting; without parentheses here it silently matches nothing.
         std::string patternString =
             "mpd_run_data_.*_CST_" +  ss.str() +
-            "_p\\d{5}\\.FLOW\\.hdf5";
+            "_p(\\d{5})\\.FLOW\\.hdf5";
 
         std::regex pattern(patternString);
 
