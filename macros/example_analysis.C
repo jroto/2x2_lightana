@@ -43,7 +43,7 @@ void example_analysis()
                     if (!eventAna.Meta().IsValid(adc, ch)) continue;
                     const ndlar_light::MetaWaveformAna& wa = eventAna.GetWaveformAna(adc, ch);
                     std::cout << "  ADC " << adc << " CH " << ch
-                              << " mean=" << wa.GetResults().at(ndlar_light::WaveformAna::kMean) << "\n";
+                              << " mean=" << wa.GetParam(ndlar_light::WaveformAna::kMeanName) << "\n";
                     ++n_channels_shown;
                 }
             }

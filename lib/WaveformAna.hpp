@@ -7,33 +7,39 @@
 // doesn't know about validity - that's an Event-level concept); computes
 // and stores its analysis results immediately in the constructor.
 //
-// Results are stored in a generic std::map<std::string, double> rather
-// than fixed named fields, so future quantities (RMS, integral, peak
-// amplitude, peak time, baseline, ...) can be added without an API
-// change. Known keys get a `k<Name>` constant and a typed `Get<Name>()`
-// accessor on top of the map.
+// Results are stored in a dense std::vector<double> indexed by the
+// shared MetaWaveformAna parameter registry (see MetaWaveformAna.hpp),
+// rather than a std::map<std::string,double> per instance - this avoids
+// repeating the same key strings/map overhead for every one of the
+// 8*64 waveforms per event. Known parameters get a
+// `static const std::size_t k<Name>Index` (registered once via
+// MetaWaveformAna::RegisterParam) plus a typed `Get<Name>()` accessor
+// built on top of the index-based API.
 //
 
 #include "MetaWaveformAna.hpp"
 #include "Waveform.hpp"
 
+#include <cmath>
 #include <iomanip>
-#include <map>
+#include <limits>
 #include <ostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace ndlar_light {
 
 class WaveformAna : public MetaWaveformAna {
 public:
-    /// Known analysis parameter keys, to avoid magic strings scattered
-    /// across the codebase. Add a new `k<Name>` here (and a matching
-    /// `Get<Name>()` below) whenever a new quantity is computed.
-    static constexpr const char* kMean = "mean";
+    /// Name and registry index for the "mean" parameter. Add a new
+    /// `kFooName`/`kFooIndex` pair here (and a matching `GetFoo()` below)
+    /// whenever a new quantity is computed.
+    static constexpr const char* kMeanName = "mean";
+    static const std::size_t kMeanIndex;
 
     /// Default-constructed, unanalyzed placeholder (adc/channel = -1, no
-    /// results). Needed so WaveformAna can live in a fixed-size 8x64
+    /// params set). Needed so WaveformAna can live in a fixed-size 8x64
     /// array (see EventAna) before being assigned a real analysis via the
     /// parameterized constructor below.
     WaveformAna() = default;
@@ -47,9 +53,18 @@ public:
         , fClipped(wf.IsClipped())
         , fValid(isValid)
     {
+        // Sized to the full registry (not just this class's own params)
+        // so indices from any other registered analyzer are always
+        // valid to query (HasParamIndex() just returns false for them).
+        fParams.resize(MetaWaveformAna::ParamNames().size(),
+                        std::numeric_limits<double>::quiet_NaN());
+
         double sum = 0.0;
         for (std::size_t s = 0; s < wf.Size(); ++s) sum += wf.GetSample(s);
-        fResults[kMean] = sum / static_cast<double>(wf.Size());
+        double mean = sum / static_cast<double>(wf.Size());
+
+        if (kMeanIndex >= fParams.size()) fParams.resize(kMeanIndex + 1, std::numeric_limits<double>::quiet_NaN());
+        fParams[kMeanIndex] = mean;
     }
 
     int GetADC() const override { return fAdc; }
@@ -57,30 +72,32 @@ public:
     bool IsClipped() const override { return fClipped; }
     bool IsValid() const override { return fValid; }
 
-    /// Generic access to all computed parameters.
-    const std::map<std::string, double>& GetResults() const override { return fResults; }
+    bool HasParamIndex(std::size_t index) const override
+    {
+        if (index >= fParams.size()) return false;
+        return !std::isnan(fParams[index]);
+    }
 
-    /// Looks up `key` in the results map. Throws std::out_of_range (with
-    /// a message including adc/channel/key) if not present - a missing
-    /// key here indicates a real bug (this class always computes the
+    /// Value stored for parameter `index`. Throws std::out_of_range (with
+    /// a message including adc/channel/index) if not present - a missing
+    /// value here indicates a real bug (this class always computes the
     /// parameters it advertises), so failing loudly is preferred over
     /// silently returning a sentinel value.
-    double Get(const std::string& key) const
+    double GetParamByIndex(std::size_t index) const override
     {
-        auto it = fResults.find(key);
-        if (it == fResults.end()) {
+        if (!HasParamIndex(index)) {
             throw std::out_of_range(
-                "WaveformAna::Get: key '" + key + "' not found for ADC " +
-                std::to_string(fAdc) + " CH " + std::to_string(fChannel));
+                "WaveformAna::GetParamByIndex: missing index " + std::to_string(index) +
+                " for ADC " + std::to_string(fAdc) + " CH " + std::to_string(fChannel));
         }
-        return it->second;
+        return fParams[index];
     }
 
     /// Typed convenience getter for the arithmetic mean of the 600 samples.
-    double GetMean() const { return Get(kMean); }
+    double GetMean() const { return GetParamByIndex(kMeanIndex); }
 
-    /// Tabular print: adc/channel, clipped, valid, and all entries
-    /// currently in the results map.
+    /// Tabular print: adc/channel, clipped, valid, and all currently-set
+    /// parameters (by name, via the shared registry).
     void Print(std::ostream& os = std::cout) const override
     {
         os << std::left
@@ -90,7 +107,10 @@ public:
         os << std::left
            << std::setw(6) << fAdc << std::setw(6) << fChannel
            << std::setw(10) << fClipped << std::setw(8) << fValid;
-        for (const auto& kv : fResults) os << kv.first << "=" << kv.second << " ";
+        const auto& names = MetaWaveformAna::ParamNames();
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            if (HasParamIndex(i)) os << names[i] << "=" << fParams[i] << " ";
+        }
         os << "\n";
     }
 
@@ -105,7 +125,10 @@ private:
     int fChannel = -1;
     bool fClipped = false;
     bool fValid = false;
-    std::map<std::string, double> fResults;
+    std::vector<double> fParams;
 };
+
+inline const std::size_t WaveformAna::kMeanIndex =
+    MetaWaveformAna::RegisterParam(WaveformAna::kMeanName);
 
 } // namespace ndlar_light

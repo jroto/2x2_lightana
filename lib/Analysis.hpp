@@ -21,7 +21,6 @@
 #include <functional>
 #include <limits>
 #include <memory>
-#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -90,10 +89,12 @@ public:
     /// Dumps the current analysis results (fEvents) into a ROOT file as a
     /// TTree with one entry per (event, adc, channel) waveform. Uses only
     /// the already-computed contents of fEvents - does NOT re-read the
-    /// Run or call process(). Analysis-variable branches (one per key
-    /// found in any WaveformAna::GetResults() map) are discovered
-    /// dynamically, so new analysis quantities automatically appear here
-    /// without touching this method.
+    /// Run or call process(). Analysis-variable branches are created for
+    /// every parameter name registered in the shared
+    /// MetaWaveformAna registry (MetaWaveformAna::ParamNames()) - since
+    /// every concrete analyzer registers its keys once via
+    /// RegisterParam(), this remains dynamic: new analysis quantities
+    /// automatically appear here without touching this method.
     void Dump(const std::string& filename, const std::string& treename = "waveforms") const
     {
         if (fEvents.empty()) {
@@ -108,19 +109,10 @@ public:
             return;
         }
 
-        // Union of all analysis parameter names present across every
-        // MetaWaveformAna in fEvents - determines the dynamic branch set.
-        std::set<std::string> paramNames;
-        for (const auto& eventAna : fEvents) {
-            for (int adc = 0; adc < kNumADCs; ++adc) {
-                for (int ch = 0; ch < kNumChannels; ++ch) {
-                    const MetaWaveformAna& wa = eventAna.GetWaveformAna(adc, ch);
-                    for (const auto& kv : wa.GetResults()) {
-                        paramNames.insert(kv.first);
-                    }
-                }
-            }
-        }
+        // Full set of registered analysis parameter names - assumed to be
+        // the complete union across all analyzer implementations, since
+        // each registers its keys once via MetaWaveformAna::RegisterParam().
+        const auto& allNames = MetaWaveformAna::ParamNames();
 
         TFile outfile(filename.c_str(), "RECREATE");
         if (outfile.IsZombie()) {
@@ -156,18 +148,21 @@ public:
         tree->Branch("valid", &valid, "valid/O");
         tree->Branch("clipped", &clipped, "clipped/O");
 
-        // Dynamic analysis-variable branches, one Double_t per key name.
+        // Dynamic analysis-variable branches, one Double_t per registered
+        // parameter name, addressed by registry index at fill time.
         struct ParamBranch {
             std::string name;
+            std::size_t index;
             Double_t value;
         };
 
         std::vector<ParamBranch> paramBranches;
-        paramBranches.reserve(paramNames.size());
+        paramBranches.reserve(allNames.size());
 
-        for (const auto& pname : paramNames) {
+        for (const auto& pname : allNames) {
             ParamBranch pb;
             pb.name = pname;
+            pb.index = MetaWaveformAna::ParamIndex(pname);
             pb.value = std::numeric_limits<double>::quiet_NaN();
             tree->Branch(pb.name.c_str(), &pb.value, (pname + "/D").c_str());
             paramBranches.push_back(std::move(pb));
@@ -183,7 +178,6 @@ public:
 
                 for (int ch_idx = 0; ch_idx < kNumChannels; ++ch_idx) {
                     const MetaWaveformAna& wa = eventAna.GetWaveformAna(adc_idx, ch_idx);
-                    const auto& results = wa.GetResults();
 
                     event_id = meta.GetId();
                     event_number = meta.GetEventNumber();
@@ -195,9 +189,8 @@ public:
                     clipped = wa.IsClipped();
 
                     for (auto& pb : paramBranches) {
-                        auto it = results.find(pb.name);
-                        pb.value = (it != results.end())
-                                       ? it->second
+                        pb.value = wa.HasParamIndex(pb.index)
+                                       ? wa.GetParamByIndex(pb.index)
                                        : std::numeric_limits<double>::quiet_NaN();
                     }
 

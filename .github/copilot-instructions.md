@@ -99,20 +99,41 @@ layer), reading `/light/events/data` and `/light/wvfm/data`:
   subrun (used internally by `Analysis::process()` — call it if you reuse a `Run` after
   external iteration).
 - `lib/MetaWaveformAna.hpp` — pure abstract interface (`GetADC/GetChannel/IsClipped/IsValid/
-  GetResults/Print`, no data members) implemented by `WaveformAna`. Exists so `EventAna` and
-  `Analysis`/`Dump()` depend only on this interface, never on the concrete `WaveformAna` type
-  — this is what makes the analysis step pluggable (see `Analysis.hpp` below).
+  Print`, plus `HasParamIndex(index)`/`GetParamByIndex(index)`, no data members) implemented
+  by `WaveformAna`. Exists so `EventAna` and `Analysis`/`Dump()` depend only on this
+  interface, never on the concrete `WaveformAna` type — this is what makes the analysis step
+  pluggable (see `Analysis.hpp` below). Analysis parameter *names* (e.g. `"mean"`) are not
+  per-instance data — they live in a **process-wide shared registry** on `MetaWaveformAna`
+  itself: a private nested `Registry{names, indexByName}` accessed only via a function-local
+  static `static Registry& MutableRegistry()` (this avoids static-initialization-order issues
+  across headers, since concrete classes register their parameter names via out-of-line
+  `static const std::size_t` member initializers evaluated at first use — see `WaveformAna`
+  below). Public static API: `RegisterParam(name)` (registers if new, returns existing index
+  otherwise — idempotent), `ParamIndex(name)` (**throws `std::out_of_range`** if the name was
+  never registered), `ParamNames()` (returns the full, insertion-ordered list of registered
+  names — this is what `Analysis::Dump()` iterates to build branches). Non-virtual
+  convenience wrappers `HasParam(name)`/`GetParam(name)` are built on top of the virtual
+  index-based methods + `ParamIndex(name)`, so callers can use whichever is more convenient.
 - `lib/WaveformAna.hpp` — the default/standard analysis implementation, `class WaveformAna :
   public MetaWaveformAna`. Constructed as
   `WaveformAna(const Waveform&, bool isValid)` — `isValid` must be passed explicitly
   (`Event::IsValid(adc, ch)`) since `Waveform` itself has no notion of validity. Computed
-  quantities live in a generic `std::map<std::string, double> results` (not fixed struct
-  fields) so new quantities (RMS, integral, peak, baseline, ...) can be added without an API
-  change — follow the existing pattern: a `static constexpr const char* k<Name>` key constant
-  + a typed `Get<Name>()` accessor (see `kMean`/`GetMean()`). `Get(key)` **throws
-  `std::out_of_range`** on a missing key — this project treats a missing key as a bug (the
-  class always computes what it advertises), not a soft/NaN case. Has a default constructor
-  (all fields default/-1) so it can live in a fixed-size 8x64 array before being analyzed.
+  quantities are stored in a dense per-instance `std::vector<double> fParams`, indexed by the
+  shared registry index (NOT a per-instance map) — `fParams` is sized to
+  `MetaWaveformAna::ParamNames().size()` and filled with `NaN` as the "not present" sentinel,
+  so `HasParamIndex(i)` is simply `i < fParams.size() && !std::isnan(fParams[i])`. This dense
+  layout is why the registry exists: it avoids per-instance map overhead across the 8x64
+  waveforms held per event. Follow the existing pattern when adding a new quantity (e.g.
+  RMS): a `static constexpr const char* k<Name>Name = "<name>";` string constant, an
+  out-of-line `static const std::size_t k<Name>Index` defined at file scope as
+  `inline const std::size_t WaveformAna::k<Name>Index = MetaWaveformAna::RegisterParam(WaveformAna::k<Name>Name);`
+  (this is what actually registers the name in the shared registry, the first time the header
+  is loaded), and a typed `Get<Name>()` accessor built on `GetParamByIndex(k<Name>Index)` (see
+  `kMeanName`/`kMeanIndex`/`GetMean()`). `GetParamByIndex(index)` **throws
+  `std::out_of_range`** if `!HasParamIndex(index)` — this project treats a missing/NaN value
+  as a bug (the class always computes what it advertises), not a soft case. Has a default
+  constructor (all fields default/-1) so it can live in a fixed-size 8x64 array before being
+  analyzed.
 - `lib/EventAna.hpp` — analyzed counterpart to `Event`: same `EventMetadata fMeta` (via
   `Meta()`, composition) but an 8x64 matrix of `std::unique_ptr<MetaWaveformAna>` (polymorphic,
   not a concrete `WaveformAna`) instead of raw `Waveform`. `GetWaveformAna(adc, ch)` returns
@@ -141,13 +162,16 @@ layer), reading `/light/events/data` and `/light/wvfm/data`:
     already-computed `fEvents` (does **not** re-read the `Run` or call `process()` itself —
     call `process()` first). Static branches: `event_id/l`, `event_number/I`, `trig_type/b`,
     `sn/I`, `utime_ms/l`, `tai_ns/l`, `adc/I`, `channel/I`, `valid/O`, `clipped/O`. Analysis
-    variable branches are **discovered dynamically**: it unions every key across every
-    `MetaWaveformAna::GetResults()` in `fEvents` first, creates one `Double_t` branch per
-    distinct key name (e.g. `mean/D`), then fills `NaN` for any waveform missing that
-    particular key. This means adding a new key to any `MetaWaveformAna` implementation's
-    `results` (e.g. `"rms"`) automatically produces a new TTree column with zero changes to
-    `Dump()` — don't hardcode key names here. Empty `fEvents` still produces a valid
-    (zero-entry) TTree rather than erroring.
+    variable branches are **discovered via the shared registry**: it reads
+    `MetaWaveformAna::ParamNames()` directly (the full set of names ever registered by any
+    loaded `MetaWaveformAna` implementation — no per-event union pass needed), resolves each
+    name's registry index once via `MetaWaveformAna::ParamIndex(name)`, creates one
+    `Double_t` branch per name (e.g. `mean/D`), then fills each waveform's branch value via
+    `wa.HasParamIndex(index) ? wa.GetParamByIndex(index) : NaN`. This means adding a new
+    quantity to any `MetaWaveformAna` implementation (e.g. registering `"rms"`) automatically
+    produces a new TTree column with zero changes to `Dump()` — don't hardcode parameter
+    names here. Empty `fEvents` still produces a valid (zero-entry) TTree rather than
+    erroring.
 - `lib/NDLArLight.hpp` — umbrella header aggregating the above.
 - `macros/example_loop.C` — reference example for the raw reader: build a `Run` from
   an explicit file list, loop with `HasNext()`/`NextEvent()`, print metadata + first 5 samples
