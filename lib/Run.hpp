@@ -66,7 +66,7 @@ public:
         std::stringstream ss;
         ss << std::setw(6) << std::setfill('0') << runNumber;
         std::string patternString =
-            "mpd_run_data_*_CST_" +  ss.str() +
+            "mpd_run_data_.*_CST_" +  ss.str() +
             "_p\\d{5}\\.FLOW\\.hdf5";
 
         std::regex pattern(patternString);

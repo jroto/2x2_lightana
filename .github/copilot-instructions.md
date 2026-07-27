@@ -98,7 +98,12 @@ layer), reading `/light/events/data` and `/light/wvfm/data`:
   (not stubbed). `Reset()` rewinds sequential iteration to the first event of the first
   subrun (used internally by `Analysis::process()` — call it if you reuse a `Run` after
   external iteration).
-- `lib/WaveformAna.hpp` — analysis results for one waveform. Constructed as
+- `lib/MetaWaveformAna.hpp` — pure abstract interface (`GetADC/GetChannel/IsClipped/IsValid/
+  GetResults/Print`, no data members) implemented by `WaveformAna`. Exists so `EventAna` and
+  `Analysis`/`Dump()` depend only on this interface, never on the concrete `WaveformAna` type
+  — this is what makes the analysis step pluggable (see `Analysis.hpp` below).
+- `lib/WaveformAna.hpp` — the default/standard analysis implementation, `class WaveformAna :
+  public MetaWaveformAna`. Constructed as
   `WaveformAna(const Waveform&, bool isValid)` — `isValid` must be passed explicitly
   (`Event::IsValid(adc, ch)`) since `Waveform` itself has no notion of validity. Computed
   quantities live in a generic `std::map<std::string, double> results` (not fixed struct
@@ -109,28 +114,40 @@ layer), reading `/light/events/data` and `/light/wvfm/data`:
   class always computes what it advertises), not a soft/NaN case. Has a default constructor
   (all fields default/-1) so it can live in a fixed-size 8x64 array before being analyzed.
 - `lib/EventAna.hpp` — analyzed counterpart to `Event`: same `EventMetadata fMeta` (via
-  `Meta()`, composition) but an 8x64 `WaveformAna` matrix instead of raw `Waveform`.
-  Structurally parallel to `Event` by design — don't duplicate metadata handling here.
-- `lib/Analysis.hpp` — processes a full `Run` into `std::vector<EventAna>`. Holds a
-  **non-owning `Run&`** (caller must keep the `Run` alive). `process()` always calls
-  `fRun.Reset()` first (so it covers the whole run regardless of prior iteration state), then
-  streams one raw `Event` at a time via `HasNext()`/`NextEvent()` — it must never hold more
-  than one raw `Event` in memory at once, even though the resulting `EventAna` vector for a
-  full run is fine to keep (each `EventAna` is far lighter than a raw `Event`: doubles instead
-  of 600 raw samples per channel). **This is the only header that depends on ROOT I/O**
-  (`TFile.h`/`TTree.h`) — the reader/data-model layers stay ROOT-I/O-free by design; keep new
-  ROOT persistence code here, not in `Event`/`EventAna`/`WaveformAna`.
+  `Meta()`, composition) but an 8x64 matrix of `std::unique_ptr<MetaWaveformAna>` (polymorphic,
+  not a concrete `WaveformAna`) instead of raw `Waveform`. `GetWaveformAna(adc, ch)` returns
+  `const MetaWaveformAna&` and **throws `std::runtime_error`** if that slot is still `nullptr`
+  (i.e. `Analysis::process()` hasn't populated it yet) — never dereference without going
+  through this accessor. Structurally parallel to `Event` by design — don't duplicate
+  metadata handling here.
+- `lib/Analysis.hpp` — processes a full `Run` into `std::vector<EventAna>`, **pluggable** via
+  a `WaveformAnaFactory` (`std::function<std::unique_ptr<MetaWaveformAna>(const Waveform&,
+  bool isValid)>`) passed to the constructor (defaults to `DefaultWaveformAnaFactory()`,
+  which builds the standard `WaveformAna`). To run a custom analysis, derive a class from
+  `MetaWaveformAna` and pass a factory lambda constructing it —
+  `Analysis`/`EventAna`/`Dump()` only ever touch the `MetaWaveformAna` base interface, so no
+  other code needs to change. Holds a **non-owning `Run&`** (caller must keep the `Run`
+  alive). `process()` always calls `fRun.Reset()` first (so it covers the whole run
+  regardless of prior iteration state), then streams one raw `Event` at a time via
+  `HasNext()`/`NextEvent()`, calling `fFactory(waveform, isValid)` per (adc, channel) — it
+  must never hold more than one raw `Event` in memory at once, even though the resulting
+  `EventAna` vector for a full run is fine to keep (each `EventAna` is far lighter than a raw
+  `Event`: doubles instead of 600 raw samples per channel). **This is the only header that
+  depends on ROOT I/O** (`TFile.h`/`TTree.h`) — the reader/data-model layers stay
+  ROOT-I/O-free by design; keep new ROOT persistence code here, not in
+  `Event`/`EventAna`/`WaveformAna`.
   - `Dump(filename, treename="waveforms")` writes one TTree entry per (event, adc, channel)
     waveform (so `NumEvents * 8 * 64` entries — e.g. 905 events → 463,360 entries) from the
     already-computed `fEvents` (does **not** re-read the `Run` or call `process()` itself —
     call `process()` first). Static branches: `event_id/l`, `event_number/I`, `trig_type/b`,
     `sn/I`, `utime_ms/l`, `tai_ns/l`, `adc/I`, `channel/I`, `valid/O`, `clipped/O`. Analysis
     variable branches are **discovered dynamically**: it unions every key across every
-    `WaveformAna::GetResults()` in `fEvents` first, creates one `Double_t` branch per distinct
-    key name (e.g. `mean/D`), then fills `NaN` for any waveform missing that particular key.
-    This means adding a new key to `WaveformAna::results` (e.g. `"rms"`) automatically
-    produces a new TTree column with zero changes to `Dump()` — don't hardcode key names here.
-    Empty `fEvents` still produces a valid (zero-entry) TTree rather than erroring.
+    `MetaWaveformAna::GetResults()` in `fEvents` first, creates one `Double_t` branch per
+    distinct key name (e.g. `mean/D`), then fills `NaN` for any waveform missing that
+    particular key. This means adding a new key to any `MetaWaveformAna` implementation's
+    `results` (e.g. `"rms"`) automatically produces a new TTree column with zero changes to
+    `Dump()` — don't hardcode key names here. Empty `fEvents` still produces a valid
+    (zero-entry) TTree rather than erroring.
 - `lib/NDLArLight.hpp` — umbrella header aggregating the above.
 - `macros/example_loop.C` — reference example for the raw reader: build a `Run` from
   an explicit file list, loop with `HasNext()`/`NextEvent()`, print metadata + first 5 samples

@@ -10,13 +10,17 @@
 
 #include "Event.hpp"
 #include "EventAna.hpp"
+#include "MetaWaveformAna.hpp"
 #include "Run.hpp"
+#include "WaveformAna.hpp"
 
 #include "TFile.h"
 #include "TTree.h"
 
 #include <cstddef>
+#include <functional>
 #include <limits>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -24,11 +28,31 @@
 
 namespace ndlar_light {
 
+/// Factory signature for constructing a concrete MetaWaveformAna from a
+/// raw Waveform plus its Event-level validity flag. Lets Analysis be
+/// pluggable: pass a custom factory to run a different analysis
+/// implementation without changing Analysis/EventAna/Dump.
+using WaveformAnaFactory =
+    std::function<std::unique_ptr<MetaWaveformAna>(const Waveform&, bool isValid)>;
+
+/// Default factory, constructing the standard WaveformAna (mean-only,
+/// for now).
+inline WaveformAnaFactory DefaultWaveformAnaFactory()
+{
+    return [](const Waveform& wf, bool isValid) {
+        return std::make_unique<WaveformAna>(wf, isValid);
+    };
+}
+
 class Analysis {
 public:
     /// `run` is stored as a reference; Analysis does not manage its
-    /// lifetime.
-    explicit Analysis(Run& run) : fRun(run) {}
+    /// lifetime. `factory` selects which concrete MetaWaveformAna
+    /// implementation to construct per waveform - defaults to the
+    /// standard WaveformAna, but callers can supply their own to plug in
+    /// a different analysis without touching Analysis/EventAna/Dump.
+    explicit Analysis(Run& run, WaveformAnaFactory factory = DefaultWaveformAnaFactory())
+        : fRun(run), fFactory(std::move(factory)) {}
 
     /// Iterates the referenced Run from the start (calls Run::Reset()
     /// first, so process() always covers the full run regardless of any
@@ -49,7 +73,8 @@ public:
             for (int adc = 0; adc < kNumADCs; ++adc) {
                 for (int ch = 0; ch < kNumChannels; ++ch) {
                     bool valid = event.IsValid(adc, ch);
-                    ana.MutableWaveformAna(adc, ch) = WaveformAna(event.GetWaveform(adc, ch), valid);
+                    auto ptr = fFactory(event.GetWaveform(adc, ch), valid);
+                    ana.SetWaveformAna(adc, ch, std::move(ptr));
                 }
             }
 
@@ -84,12 +109,12 @@ public:
         }
 
         // Union of all analysis parameter names present across every
-        // WaveformAna in fEvents - determines the dynamic branch set.
+        // MetaWaveformAna in fEvents - determines the dynamic branch set.
         std::set<std::string> paramNames;
         for (const auto& eventAna : fEvents) {
             for (int adc = 0; adc < kNumADCs; ++adc) {
                 for (int ch = 0; ch < kNumChannels; ++ch) {
-                    const WaveformAna& wa = eventAna.GetWaveformAna(adc, ch);
+                    const MetaWaveformAna& wa = eventAna.GetWaveformAna(adc, ch);
                     for (const auto& kv : wa.GetResults()) {
                         paramNames.insert(kv.first);
                     }
@@ -157,7 +182,7 @@ public:
                 tai_ns = meta.GetTaiNs(adc_idx);
 
                 for (int ch_idx = 0; ch_idx < kNumChannels; ++ch_idx) {
-                    const WaveformAna& wa = eventAna.GetWaveformAna(adc_idx, ch_idx);
+                    const MetaWaveformAna& wa = eventAna.GetWaveformAna(adc_idx, ch_idx);
                     const auto& results = wa.GetResults();
 
                     event_id = meta.GetId();
@@ -188,6 +213,7 @@ public:
 
 private:
     Run& fRun;
+    WaveformAnaFactory fFactory;
     std::vector<EventAna> fEvents;
 };
 

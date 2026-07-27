@@ -23,9 +23,7 @@ void example_analysis()
     };
 
     try {
-        ndlar_light::Run run("/pnfs/dune/scratch/users/jsoto/NDLAr_Run3/VBRscan_20260716/",
-                            1130);
-//        "mpd_run_data_2026_07_16_14_05_34_CST_001130_p00003.FLOW.hdf5);
+        ndlar_light::Run run(subrun_files);
         std::cout << "Run has " << run.NumSubruns() << " subrun(s), "
                   << run.TotalEvents() << " total events.\n";
 
@@ -46,9 +44,9 @@ void example_analysis()
             for (int adc = 0; adc < ndlar_light::kNumADCs && n_channels_shown < 2; ++adc) {
                 for (int ch = 0; ch < ndlar_light::kNumChannels && n_channels_shown < 2; ++ch) {
                     if (!eventAna.Meta().IsValid(adc, ch)) continue;
-                    const ndlar_light::WaveformAna& wa = eventAna.GetWaveformAna(adc, ch);
+                    const ndlar_light::MetaWaveformAna& wa = eventAna.GetWaveformAna(adc, ch);
                     std::cout << "  ADC " << adc << " CH " << ch
-                              << " mean=" << wa.GetMean() << "\n";
+                              << " mean=" << wa.GetResults().at(ndlar_light::WaveformAna::kMean) << "\n";
                     ++n_channels_shown;
                 }
             }

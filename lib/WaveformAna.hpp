@@ -14,6 +14,7 @@
 // accessor on top of the map.
 //
 
+#include "MetaWaveformAna.hpp"
 #include "Waveform.hpp"
 
 #include <iomanip>
@@ -24,7 +25,7 @@
 
 namespace ndlar_light {
 
-class WaveformAna {
+class WaveformAna : public MetaWaveformAna {
 public:
     /// Known analysis parameter keys, to avoid magic strings scattered
     /// across the codebase. Add a new `k<Name>` here (and a matching
@@ -51,13 +52,13 @@ public:
         fResults[kMean] = sum / static_cast<double>(wf.Size());
     }
 
-    int GetADC() const { return fAdc; }
-    int GetChannel() const { return fChannel; }
-    bool IsClipped() const { return fClipped; }
-    bool IsValid() const { return fValid; }
+    int GetADC() const override { return fAdc; }
+    int GetChannel() const override { return fChannel; }
+    bool IsClipped() const override { return fClipped; }
+    bool IsValid() const override { return fValid; }
 
     /// Generic access to all computed parameters.
-    const std::map<std::string, double>& GetResults() const { return fResults; }
+    const std::map<std::string, double>& GetResults() const override { return fResults; }
 
     /// Looks up `key` in the results map. Throws std::out_of_range (with
     /// a message including adc/channel/key) if not present - a missing
@@ -80,7 +81,7 @@ public:
 
     /// Tabular print: adc/channel, clipped, valid, and all entries
     /// currently in the results map.
-    void Print(std::ostream& os = std::cout) const
+    void Print(std::ostream& os = std::cout) const override
     {
         os << std::left
            << std::setw(6) << "ADC" << std::setw(6) << "CH"

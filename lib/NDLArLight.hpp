@@ -11,6 +11,7 @@
 #include "Event.hpp"
 #include "SubRunReader.hpp"
 #include "Run.hpp"
+#include "MetaWaveformAna.hpp"
 #include "WaveformAna.hpp"
 #include "EventAna.hpp"
 #include "Analysis.hpp"
