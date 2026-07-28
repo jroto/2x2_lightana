@@ -22,40 +22,27 @@ void example_loop()
     int run_number = 1130;
     try {
         ndlar_light::Run run(path, run_number);
-
+        run.Print();
+        run.getChannelMap().Reset(); // deactivate all channels
+        run.SelectChannel(2, 4, true); // activate ADC 2, channel 4
+        run.Print();
+        ndlar_light::Analysis analysis(run);
+        analysis.Loop();
         std::cout << "Run has " << run.NumSubruns() << " subrun(s), "
                   << run.TotalEvents() << " total events.\n";
 
+/*
         size_t max_events = 5000;
         size_t n_printed = 0;
-
         while (run.HasNext() && n_printed < max_events) {
             const ndlar_light::Event& event = run.NextEvent();
 
             std::cout << "Event #" << event.GetEventNumber()
                       << " (id=" << event.GetId() << "):\n"
                       << "  trig_type=" << static_cast<int>(event.GetTriggerType()) << "\n";
-/*
-            for (int adc = 0; adc < ndlar_light::kNumADCs; ++adc) {
-                std::cout << "  ADC " << adc
-                          << " sn=" << event.GetSerialNumber(adc)
-                          << " utime_ms=" << event.GetUTimeMs(adc)
-                          << " tai_ns=" << event.GetTaiNs(adc) << "\n";
-
-                for (int ch = 0; ch < ndlar_light::kNumChannels; ++ch) {
-                    if (!event.IsValid(adc, ch)) continue;
-
-                    const ndlar_light::Waveform& wf = event.GetWaveform(adc, ch);
-                    std::cout << "    CH " << ch
-                              << " clipped=" << wf.IsClipped()
-                              << " samples[0:5]=";
-                    for (size_t s = 0; s < 5; ++s) std::cout << wf.GetSample(s) << " ";
-                    std::cout << "...\n";
-                }
-            }
-*/
-            ++n_printed;
+            n_printed++;
         }
+*/
     } catch (const std::exception& e) {
         std::cerr << "example_loop error: " << e.what() << std::endl;
     }

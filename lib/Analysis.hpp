@@ -16,13 +16,22 @@
 
 #include "TFile.h"
 #include "TTree.h"
+#include "TCanvas.h"
+#include "TH1F.h"
+#include "TPaveText.h"
+#include "TText.h"
+#include "TStyle.h"
+#include "TSystem.h"
 
+#include <cmath>
 #include <cstddef>
 #include <functional>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ndlar_light {
@@ -206,6 +215,153 @@ public:
         outfile.cd();
         tree->Write();
         outfile.Close();
+    }
+
+    /// Interactive, on-the-fly event display: iterates the referenced Run
+    /// (calling fRun.Reset() internally - process() need NOT have been
+    /// called first, and if it *has* been called, Loop() still re-reads
+    /// the run from the beginning, independent of fEvents) and, for each
+    /// event, draws the waveforms of every active+valid (adc, channel)
+    /// slot in a dynamically-laid-out TCanvas grid, overlaying computed
+    /// analysis parameters, then waits for the user to press Enter (next
+    /// event) or 'q' + Enter (quit). Stops after `maxEvents` events (if
+    /// positive), when the run is exhausted, or when the user quits.
+    void Loop(int maxEvents = -1)
+    {
+        const ChannelMap& chmap = fRun.GetChannelMap();
+
+        // --- Collect active channels from the ChannelMap ---
+        std::vector<std::pair<int, int>> activeChannels; // (adc, ch)
+        for (int adc = 0; adc < kNumADCs; ++adc)
+            for (int ch = 0; ch < kNumChannels; ++ch)
+                if (chmap.IsActive(adc, ch))
+                    activeChannels.emplace_back(adc, ch);
+
+        if (activeChannels.empty()) {
+            std::cout << "Analysis::Loop: no active channels in ChannelMap. "
+                      << "Use Run::SelectChannel() to activate channels.\n";
+            return;
+        }
+
+        // --- Compute canvas grid dimensions ---
+        const int nPads = static_cast<int>(activeChannels.size());
+        const int nCols = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(nPads))));
+        const int nRows = static_cast<int>(std::ceil(static_cast<double>(nPads) / nCols));
+
+        // --- Create canvas ---
+        TCanvas* canvas = new TCanvas("Loop_canvas", "Analysis::Loop", 200, 10, 1400, 900);
+        canvas->Divide(nCols, nRows);
+        gStyle->SetOptStat(0);
+
+        // --- Reset run and iterate ---
+        fRun.Reset();
+        int eventCount = 0;
+
+        while (fRun.HasNext()) {
+            if (maxEvents > 0 && eventCount >= maxEvents) break;
+
+            const Event& event = fRun.NextEvent();
+            ++eventCount;
+
+            // Collect valid waveforms for active channels (a channel may
+            // be active in the map but flagged invalid in this event).
+            std::vector<std::pair<int, int>> validChannels;
+            for (std::size_t i = 0; i < activeChannels.size(); ++i) {
+                int adc = activeChannels[i].first;
+                int ch = activeChannels[i].second;
+                if (event.IsValid(adc, ch))
+                    validChannels.emplace_back(adc, ch);
+            }
+
+            if (validChannels.empty()) {
+                std::cout << "Analysis::Loop: event " << eventCount
+                          << " has no valid active channels - skipping.\n";
+                continue;
+            }
+
+            // --- Draw each waveform ---
+            const auto& paramNames = MetaWaveformAna::ParamNames();
+
+            int padIdx = 1;
+            for (std::size_t i = 0; i < activeChannels.size(); ++i) {
+                int adc = activeChannels[i].first;
+                int ch = activeChannels[i].second;
+
+                canvas->cd(padIdx++);
+                gPad->Clear();
+
+                if (!event.IsValid(adc, ch)) {
+                    // Draw a blank pad with a label for inactive/invalid slots
+                    TPaveText* msg = new TPaveText(0.1, 0.4, 0.9, 0.6, "NDC");
+                    msg->AddText(Form("ADC %d / CH %d", adc, ch));
+                    msg->AddText("(inactive / invalid)");
+                    msg->SetFillColor(0);
+                    msg->SetTextColor(kGray + 1);
+                    msg->Draw();
+                    continue;
+                }
+
+                const Waveform& wf = event.GetWaveform(adc, ch);
+                WaveformAna wa(wf, true);
+
+                // Build TH1F for this waveform
+                std::string hname = Form("h_adc%d_ch%d_ev%d", adc, ch, eventCount);
+                TH1F* h = new TH1F(hname.c_str(), "", static_cast<int>(kNumSamples), 0, static_cast<double>(kNumSamples));
+                for (int s = 0; s < static_cast<int>(kNumSamples); ++s)
+                    h->SetBinContent(s + 1, wf.GetSample(s));
+
+                // Title: channel identity + physical info
+                const Channel& info = chmap.GetChannel(adc, ch);
+                std::string title = Form(
+                    "ADC %d / CH %d | TPC %d | trap: %s;Ticks;ADC counts",
+                    adc, ch, info.tpc, info.trap_type.c_str());
+                h->SetTitle(title.c_str());
+                h->SetLineColor(kBlue + 1);
+                h->Draw("HIST");
+
+                // Overlay parameters as TPaveText
+                if (!paramNames.empty()) {
+                    TPaveText* pt = new TPaveText(0.55, 0.72, 0.98, 0.98, "NDC");
+                    pt->SetFillColor(0);
+                    pt->SetFillStyle(1001);
+                    pt->SetBorderSize(1);
+                    pt->SetTextSize(0.04);
+                    for (std::size_t p = 0; p < paramNames.size(); ++p) {
+                        if (wa.HasParamIndex(p)) {
+                            std::string line = Form("%s = %.4g",
+                                paramNames[p].c_str(),
+                                wa.GetParamByIndex(p));
+                            pt->AddText(line.c_str());
+                        }
+                    }
+                    pt->Draw();
+                }
+
+                gPad->Update();
+            }
+
+            // Event-level title on the canvas
+            canvas->cd(0);
+            std::string canvasTitle = Form(
+                "Event %d  |  ID %llu  |  [Enter] next   [q] quit",
+                eventCount,
+                static_cast<unsigned long long>(event.Meta().GetId()));
+            canvas->SetTitle(canvasTitle.c_str());
+            canvas->Update();
+
+            // --- Wait for user input ---
+            std::cout << "Event " << eventCount
+                      << " - [Enter] next, [q+Enter] quit: " << std::flush;
+            std::string line;
+            std::getline(std::cin, line);
+            if (!line.empty() && (line[0] == 'q' || line[0] == 'Q')) break;
+
+            // Clean up histograms before next event to avoid ROOT memory buildup
+            canvas->Clear();
+            canvas->Divide(nCols, nRows);
+        }
+
+        std::cout << "Analysis::Loop: finished after " << eventCount << " events.\n";
     }
 
 private:

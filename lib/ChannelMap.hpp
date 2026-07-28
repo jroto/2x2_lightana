@@ -15,7 +15,7 @@ namespace ndlar_light {
 /// before falling back to an all-channels-active default map. Defined
 /// here (rather than NDLArLight.hpp, per the original sketch) so it's
 /// available to Run.hpp, which includes this header directly.
-static constexpr const char* kDefaultChannelMapPath = "data/channel_map.csv";
+static constexpr const char* kDefaultChannelMapPath = "data/channel_map2.csv";
 
 class ChannelMap {
 public:
@@ -34,6 +34,7 @@ public:
     /// `active` is 1 (active) or 0 (inactive).
     /// Throws std::runtime_error on file or parse errors.
     static ChannelMap LoadFromCSV(const std::string& path) {
+        std::cout << "Loading channel map from '" << path << "'..." << std::endl;
         ChannelMap cm;
         std::ifstream f(path);
         if (!f.is_open())
@@ -75,6 +76,11 @@ public:
     void SetActive(int adc, int ch, bool active) {
         fChannels[adc][ch].active = active;
     }
+    void Reset() {
+        for (int a = 0; a < kNumADCs; ++a)
+            for (int c = 0; c < kNumChannels; ++c)
+                fChannels[a][c].active = false;
+    } 
 
 private:
     Channel fChannels[kNumADCs][kNumChannels];

@@ -32,8 +32,11 @@
 #include "SubRunReader.hpp"
 
 #include <algorithm>
+#include <array>
+#include <ctime>
 #include <dirent.h>
 #include <iomanip>
+#include <iostream>
 #include <memory>
 #include <regex>
 #include <sstream>
@@ -171,6 +174,7 @@ public:
     /// Takes effect from the next call to Reset() + process().
     void SetChannelMap(const std::string& csvPath) {
         fChannelMap = ChannelMap::LoadFromCSV(csvPath);
+        fChannelMapPath = csvPath;
     }
 
     /// Programmatically activate or deactivate a single channel.
@@ -181,6 +185,81 @@ public:
     /// Read-only access to the current channel map.
     const ChannelMap& GetChannelMap() const { return fChannelMap; }
 
+    /// Prints a human-readable summary of the run: run number, event/
+    /// subrun counts, per-subrun file names and event counts, start/end
+    /// times (UTC) and duration, first-event ADC serial numbers, and
+    /// channel-map activity summary.
+    void Print(std::ostream& os = std::cout) const
+    {
+        os << "============================================================\n";
+        os << " Run summary\n";
+        os << "============================================================\n";
+        if (fRunNumber == -1) {
+            os << " Run number      : N/A (constructed from file list)\n";
+        } else {
+            os << " Run number      : " << fRunNumber << "\n";
+        }
+        os << " Total events    : " << fTotalEvents << "\n";
+        os << " Subruns         : " << fSubrunFiles.size() << "\n";
+        os << "\n Subrun files:\n";
+        for (size_t i = 0; i < fSubrunFiles.size(); ++i) {
+            size_t nEvents = fSubrunStart[i + 1] - fSubrunStart[i];
+            os << "   [" << i << "]  " << fSubrunFiles[i]
+               << "   (" << nEvents << " events)\n";
+        }
+
+        auto formatUtc = [](uint64_t ms) {
+            std::time_t t = static_cast<std::time_t>(ms / 1000);
+            std::tm* tmPtr = std::gmtime(&t);
+            char buf[32];
+            std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tmPtr);
+            return std::string(buf);
+        };
+
+        os << "\n Start time      : " << formatUtc(fStartTimeMs)
+           << " UTC  (raw: " << fStartTimeMs << " ms)\n";
+        os << " End time        : " << formatUtc(fEndTimeMs)
+           << " UTC  (raw: " << fEndTimeMs << " ms)\n";
+
+        uint64_t durationSec = (fEndTimeMs - fStartTimeMs) / 1000;
+        uint64_t hh = durationSec / 3600;
+        uint64_t mm = (durationSec % 3600) / 60;
+        uint64_t sscount = durationSec % 60;
+        os << " Run duration    : " << hh << "h "
+           << std::setw(2) << std::setfill('0') << mm << "m "
+           << std::setw(2) << std::setfill('0') << sscount << "s\n"
+           << std::setfill(' ');
+
+        os << "\n ADC serial numbers (first event):\n";
+        for (int adc = 0; adc < kNumADCs; ++adc) {
+            os << "   ADC " << adc << ": " << fStartSn[adc] << "  ";
+            if (adc % 4 == 3) os << "\n";
+        }
+        if (kNumADCs % 4 != 0) os << "\n";
+
+        os << "\n Channel map     : " << fChannelMapPath << "\n";
+        int totalActive = 0;
+        std::array<int, kNumADCs> activePerAdc{};
+        for (int adc = 0; adc < kNumADCs; ++adc) {
+            int n = 0;
+            for (int ch = 0; ch < kNumChannels; ++ch)
+                if (fChannelMap.IsActive(adc, ch)) ++n;
+            activePerAdc[adc] = n;
+            totalActive += n;
+        }
+        os << " Active channels : " << totalActive << " / " << (kNumADCs * kNumChannels) << "\n";
+        for (int adc = 0; adc < kNumADCs; ++adc) {
+            os << "   ADC " << adc << ": " << std::setw(3) << activePerAdc[adc] << " active  ";
+            if (adc % 4 == 3) os << "\n";
+        }
+        os << "============================================================\n";
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const Run& r) {
+        r.Print(os);
+        return os;
+    }
+
 private:
     /// Tries to load the default channel-map CSV; falls back silently to
     /// an all-channels-active map if it's missing/unreadable, so Run
@@ -189,8 +268,10 @@ private:
     {
         try {
             fChannelMap = ChannelMap::LoadFromCSV(kDefaultChannelMapPath);
+            fChannelMapPath = kDefaultChannelMapPath;
         } catch (...) {
             fChannelMap = ChannelMap(); // all channels active
+            fChannelMapPath = "(none - all channels active)";
         }
     }
 
@@ -208,6 +289,29 @@ private:
         }
         fSubrunStart.push_back(running_total);
         fTotalEvents = running_total;
+
+        // Cache first-event metadata (start time, serial numbers)
+        {
+            SubRunReader r(fSubrunFiles.front(), &fChannelMap);
+            Event e;
+            r.ReadRow(0, e);
+            fStartTimeMs = e.Meta().GetUTimeMs(0);
+            for (int adc = 0; adc < kNumADCs; ++adc)
+                fStartSn[adc] = e.Meta().GetSerialNumber(adc);
+        }
+
+        // Cache last-event metadata (end time) via direct random access
+        // ReadRow supports any row index - reading the last row is as
+        // cheap as reading the first (HDF5 hyperslab selection).
+        {
+            const size_t lastSubrun = fSubrunFiles.size() - 1;
+            const size_t lastRow    = fSubrunStart[lastSubrun + 1]
+                                    - fSubrunStart[lastSubrun] - 1;
+            SubRunReader r(fSubrunFiles.back(), &fChannelMap);
+            Event e;
+            r.ReadRow(lastRow, e);
+            fEndTimeMs = e.Meta().GetUTimeMs(0);
+        }
 
         Reset();
     }
@@ -265,9 +369,16 @@ private:
     std::vector<std::string> fSubrunFiles;
     int fRunNumber = -1;
     ChannelMap fChannelMap;
+    std::string fChannelMapPath = "(none - all channels active)";
 
     size_t fTotalEvents = 0;
     std::vector<size_t> fSubrunStart; // prefix sums, size = NumSubruns() + 1
+
+    // Cached first/last-event metadata, filled in Init().
+    uint64_t fStartTimeMs = 0;                  // utime_ms[0] of first event
+    uint64_t fEndTimeMs   = 0;                  // utime_ms[0] of last event
+    std::array<int32_t, kNumADCs> fStartSn = {}; // sn[8] of first event
+
 
     // Sequential iteration state.
     size_t fCurrentSubrun = 0;
