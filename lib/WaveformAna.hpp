@@ -36,7 +36,16 @@ public:
     /// `kFooName`/`kFooIndex` pair here (and a matching `GetFoo()` below)
     /// whenever a new quantity is computed.
     static constexpr const char* kMeanName = "mean";
-    static const std::size_t kMeanIndex;
+
+    /// Function-local-static accessor for the "mean" registry index.
+    /// Cling/ACLiC don't guarantee inline static member initializers run
+    /// before first use, so registration is instead forced on first call
+    /// to this function (mirrors MetaWaveformAna::MutableRegistry()).
+    static std::size_t MeanIndex()
+    {
+        static const std::size_t idx = MetaWaveformAna::RegisterParam(kMeanName);
+        return idx;
+    }
 
     /// Default-constructed, unanalyzed placeholder (adc/channel = -1, no
     /// params set). Needed so WaveformAna can live in a fixed-size 8x64
@@ -53,6 +62,8 @@ public:
         , fClipped(wf.IsClipped())
         , fValid(isValid)
     {
+        const std::size_t meanIdx = MeanIndex(); // ensures "mean" is registered
+
         // Sized to the full registry (not just this class's own params)
         // so indices from any other registered analyzer are always
         // valid to query (HasParamIndex() just returns false for them).
@@ -63,8 +74,8 @@ public:
         for (std::size_t s = 0; s < wf.Size(); ++s) sum += wf.GetSample(s);
         double mean = sum / static_cast<double>(wf.Size());
 
-        if (kMeanIndex >= fParams.size()) fParams.resize(kMeanIndex + 1, std::numeric_limits<double>::quiet_NaN());
-        fParams[kMeanIndex] = mean;
+        if (meanIdx >= fParams.size()) fParams.resize(meanIdx + 1, std::numeric_limits<double>::quiet_NaN());
+        fParams[meanIdx] = mean;
     }
 
     int GetADC() const override { return fAdc; }
@@ -94,7 +105,7 @@ public:
     }
 
     /// Typed convenience getter for the arithmetic mean of the 600 samples.
-    double GetMean() const { return GetParamByIndex(kMeanIndex); }
+    double GetMean() const { return GetParamByIndex(MeanIndex()); }
 
     /// Tabular print: adc/channel, clipped, valid, and all currently-set
     /// parameters (by name, via the shared registry).
@@ -127,8 +138,5 @@ private:
     bool fValid = false;
     std::vector<double> fParams;
 };
-
-inline const std::size_t WaveformAna::kMeanIndex =
-    MetaWaveformAna::RegisterParam(WaveformAna::kMeanName);
 
 } // namespace ndlar_light

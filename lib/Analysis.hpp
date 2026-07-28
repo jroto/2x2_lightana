@@ -156,16 +156,20 @@ public:
             Double_t value;
         };
 
-        std::vector<ParamBranch> paramBranches;
-        paramBranches.reserve(allNames.size());
-
-        for (const auto& pname : allNames) {
-            ParamBranch pb;
-            pb.name = pname;
-            pb.index = MetaWaveformAna::ParamIndex(pname);
+        // Elements are constructed in-place in their final vector slots
+        // first (via resize()), and only then does each tree->Branch()
+        // take the address of that (now-stable) vector element - binding
+        // the branch to the address of a temporary local variable that
+        // then gets copied into the vector (e.g. via push_back) would
+        // leave the branch pointing at stack memory that's reused/
+        // invalidated on the next loop iteration.
+        std::vector<ParamBranch> paramBranches(allNames.size());
+        for (std::size_t i = 0; i < allNames.size(); ++i) {
+            ParamBranch& pb = paramBranches[i];
+            pb.name = allNames[i];
+            pb.index = MetaWaveformAna::ParamIndex(pb.name);
             pb.value = std::numeric_limits<double>::quiet_NaN();
-            tree->Branch(pb.name.c_str(), &pb.value, (pname + "/D").c_str());
-            paramBranches.push_back(std::move(pb));
+            tree->Branch(pb.name.c_str(), &pb.value, (pb.name + "/D").c_str());
         }
 
         for (const auto& eventAna : fEvents) {
