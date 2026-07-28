@@ -23,6 +23,7 @@
 //
 
 #include "Event.hpp"
+#include "ChannelMap.hpp"
 
 #include <highfive/H5File.hpp>
 #include <hdf5.h>
@@ -134,8 +135,10 @@ public:
     /// `/light/wvfm/data`. Throws std::runtime_error (with the file path
     /// in the message) if the file can't be opened, the datasets are
     /// missing, or their lengths don't match.
-    explicit SubRunReader(const std::string& filename)
+    explicit SubRunReader(const std::string& filename,
+                          const ChannelMap* channelMap = nullptr)
         : fFilename(filename)
+        , fChannelMap(channelMap)
         , fFile(filename, HighFive::File::ReadOnly)
     {
         try {
@@ -231,7 +234,7 @@ private:
     static constexpr const char* kEventsPath = "/light/events/data";
     static constexpr const char* kWvfmPath = "/light/wvfm/data";
 
-    static void FillEvent(const detail::EventsRecord& er, const detail::WvfmRecord& wr, Event& event)
+    void FillEvent(const detail::EventsRecord& er, const detail::WvfmRecord& wr, Event& event)
     {
         EventMetadata& meta = event.Meta();
         meta.SetId(er.id);
@@ -244,6 +247,15 @@ private:
             meta.SetTaiNs(adc, er.tai_ns[adc]);
 
             for (int ch = 0; ch < kNumChannels; ++ch) {
+
+                // Inactive channels: force valid=false, leave Waveform
+                // slot default-constructed (no copy). Downstream code
+                // (IsValid, Analysis::process) will skip them naturally.
+                if (fChannelMap && !fChannelMap->IsActive(adc, ch)) {
+                    meta.SetValid(adc, ch, false);
+                    continue;
+                }
+
                 meta.SetValid(adc, ch, er.wvfm_valid[adc][ch] != 0);
 
                 Waveform& wf = event.MutableWaveform(adc, ch);
@@ -259,6 +271,7 @@ private:
     }
 
     std::string fFilename;
+    const ChannelMap* fChannelMap = nullptr; // non-owning, may be null
     HighFive::File fFile;
     std::unique_ptr<HighFive::DataSet> fEventsDataset;
     std::unique_ptr<HighFive::DataSet> fWvfmDataset;

@@ -9,6 +9,8 @@
 #include "Waveform.hpp"
 #include "EventMetadata.hpp"
 #include "Event.hpp"
+#include "Channel.hpp"
+#include "ChannelMap.hpp"
 #include "SubRunReader.hpp"
 #include "Run.hpp"
 #include "MetaWaveformAna.hpp"

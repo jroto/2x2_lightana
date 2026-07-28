@@ -28,6 +28,7 @@
 //
 
 #include "Event.hpp"
+#include "ChannelMap.hpp"
 #include "SubRunReader.hpp"
 
 #include <algorithm>
@@ -52,6 +53,7 @@ public:
         if (fSubrunFiles.empty()) {
             throw std::runtime_error("Run: empty subrun file list");
         }
+        LoadDefaultChannelMap();
         Init();
     }
 
@@ -83,6 +85,7 @@ public:
                 "' for run " + std::to_string(runNumber));
             
         }
+        LoadDefaultChannelMap();
         Init();
     }
 
@@ -157,14 +160,40 @@ public:
         size_t row = globalIndex - fSubrunStart[subrun];
 
         if (!fRandomAccessReader || fRandomAccessSubrun != subrun) {
-            fRandomAccessReader = std::make_unique<SubRunReader>(fSubrunFiles[subrun]);
+            fRandomAccessReader = std::make_unique<SubRunReader>(fSubrunFiles[subrun], &fChannelMap);
             fRandomAccessSubrun = subrun;
         }
         fRandomAccessReader->ReadRow(row, fRandomAccessEvent);
         return fRandomAccessEvent;
     }
 
+    /// Reload the channel map from a CSV file.
+    /// Takes effect from the next call to Reset() + process().
+    void SetChannelMap(const std::string& csvPath) {
+        fChannelMap = ChannelMap::LoadFromCSV(csvPath);
+    }
+
+    /// Programmatically activate or deactivate a single channel.
+    void SelectChannel(int adc, int ch, bool active) {
+        fChannelMap.SetActive(adc, ch, active);
+    }
+
+    /// Read-only access to the current channel map.
+    const ChannelMap& GetChannelMap() const { return fChannelMap; }
+
 private:
+    /// Tries to load the default channel-map CSV; falls back silently to
+    /// an all-channels-active map if it's missing/unreadable, so Run
+    /// works out of the box with no CSV present.
+    void LoadDefaultChannelMap()
+    {
+        try {
+            fChannelMap = ChannelMap::LoadFromCSV(kDefaultChannelMapPath);
+        } catch (...) {
+            fChannelMap = ChannelMap(); // all channels active
+        }
+    }
+
     void Init()
     {
         // Open each subrun just long enough to count its events, to build
@@ -174,7 +203,7 @@ private:
         size_t running_total = 0;
         for (const auto& path : fSubrunFiles) {
             fSubrunStart.push_back(running_total);
-            SubRunReader reader(path);
+            SubRunReader reader(path, &fChannelMap);
             running_total += reader.NumEvents();
         }
         fSubrunStart.push_back(running_total);
@@ -219,7 +248,7 @@ private:
     void EnsureReaderOpen()
     {
         if (!fReader && fCurrentSubrun < fSubrunFiles.size()) {
-            fReader = std::make_unique<SubRunReader>(fSubrunFiles[fCurrentSubrun]);
+            fReader = std::make_unique<SubRunReader>(fSubrunFiles[fCurrentSubrun], &fChannelMap);
         }
     }
 
@@ -229,12 +258,13 @@ private:
         fRowInSubrun = 0;
         fReader.reset();
         if (fCurrentSubrun < fSubrunFiles.size()) {
-            fReader = std::make_unique<SubRunReader>(fSubrunFiles[fCurrentSubrun]);
+            fReader = std::make_unique<SubRunReader>(fSubrunFiles[fCurrentSubrun], &fChannelMap);
         }
     }
 
     std::vector<std::string> fSubrunFiles;
     int fRunNumber = -1;
+    ChannelMap fChannelMap;
 
     size_t fTotalEvents = 0;
     std::vector<size_t> fSubrunStart; // prefix sums, size = NumSubruns() + 1
