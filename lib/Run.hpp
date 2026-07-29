@@ -176,7 +176,9 @@ public:
         fChannelMap = ChannelMap::LoadFromCSV(csvPath);
         fChannelMapPath = csvPath;
     }
-
+    void ResetChannels(bool active = false) {
+        fChannelMap.ResetAll(active);
+    }
     /// Programmatically activate or deactivate a single channel.
     void SelectChannel(int adc, int ch, bool active) {
         fChannelMap.SetActive(adc, ch, active);

@@ -76,10 +76,10 @@ public:
     void SetActive(int adc, int ch, bool active) {
         fChannels[adc][ch].active = active;
     }
-    void Reset() {
+    void ResetAll(bool active=false) {
         for (int a = 0; a < kNumADCs; ++a)
             for (int c = 0; c < kNumChannels; ++c)
-                fChannels[a][c].active = false;
+                fChannels[a][c].active = active;
     } 
 
 private:

@@ -23,8 +23,9 @@ void example_loop()
     try {
         ndlar_light::Run run(path, run_number);
         run.Print();
-        run.getChannelMap().Reset(); // deactivate all channels
-        run.SelectChannel(2, 4, true); // activate ADC 2, channel 4
+        run.ResetChannels(false); // deactivate all channels
+        run.SelectChannel(2, 4, true); // activate ADC 0, channel
+        run.SelectChannel(2, 5, true); // activate ADC 0, channel
         run.Print();
         ndlar_light::Analysis analysis(run);
         analysis.Loop();

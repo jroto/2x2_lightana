@@ -249,7 +249,7 @@ public:
         const int nRows = static_cast<int>(std::ceil(static_cast<double>(nPads) / nCols));
 
         // --- Create canvas ---
-        TCanvas* canvas = new TCanvas("Loop_canvas", "Analysis::Loop", 200, 10, 1400, 900);
+        TCanvas* canvas = new TCanvas("Loop_canvas", "Analysis::Loop", 200, 10, 800, 700);
         canvas->Divide(nCols, nRows);
         gStyle->SetOptStat(0);
 
