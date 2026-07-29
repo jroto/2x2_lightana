@@ -13,6 +13,7 @@
 #include "MetaWaveformAna.hpp"
 #include "Run.hpp"
 #include "WaveformAna.hpp"
+#include "WaveAna.hpp"
 
 #include "TFile.h"
 #include "TTree.h"
@@ -22,6 +23,9 @@
 #include "TText.h"
 #include "TStyle.h"
 #include "TSystem.h"
+#include "TLine.h"
+#include "TBox.h"
+#include "TMarker.h"
 
 #include <cmath>
 #include <cstddef>
@@ -302,7 +306,8 @@ public:
                 }
 
                 const Waveform& wf = event.GetWaveform(adc, ch);
-                WaveformAna wa(wf, true);
+                std::unique_ptr<MetaWaveformAna> ptr = fFactory(wf, event.IsValid(adc, ch));
+                WaveAna* wa = dynamic_cast<WaveAna*>(ptr.get());
 
                 // Build TH1F for this waveform
                 std::string hname = Form("h_adc%d_ch%d_ev%d", adc, ch, eventCount);
@@ -319,6 +324,29 @@ public:
                 h->SetLineColor(kBlue + 1);
                 h->Draw("HIST");
 
+                if (wa != nullptr) {
+                    // --- WaveAna-specific overlays: baselines and hits ---
+                    for (const auto& seg : wa->Baselines()) {
+                        TLine* line = new TLine(seg.tick_start, seg.mean, seg.tick_end, seg.mean);
+                        line->SetLineColor(kGreen + 2);
+                        line->SetLineWidth(2);
+                        line->Draw();
+                    }
+
+                    double baseline = wa->OverallBaseline();
+                    for (const auto& hit : wa->Hits()) {
+                        TBox* box = new TBox(hit.tick_start, baseline,
+                                              hit.tick_end, baseline + hit.amplitude);
+                        box->SetFillColor(kRed);
+                        box->SetFillStyle(3003);
+                        box->Draw();
+
+                        TMarker* marker = new TMarker(hit.tick_peak, wf.GetSample(hit.tick_peak), 20);
+                        marker->SetMarkerColor(kRed);
+                        marker->Draw();
+                    }
+                }
+
                 // Overlay parameters as TPaveText
                 if (!paramNames.empty()) {
                     TPaveText* pt = new TPaveText(0.55, 0.72, 0.98, 0.98, "NDC");
@@ -327,10 +355,10 @@ public:
                     pt->SetBorderSize(1);
                     pt->SetTextSize(0.04);
                     for (std::size_t p = 0; p < paramNames.size(); ++p) {
-                        if (wa.HasParamIndex(p)) {
+                        if (ptr->HasParamIndex(p)) {
                             std::string line = Form("%s = %.4g",
                                 paramNames[p].c_str(),
-                                wa.GetParamByIndex(p));
+                                ptr->GetParamByIndex(p));
                             pt->AddText(line.c_str());
                         }
                     }

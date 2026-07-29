@@ -15,5 +15,8 @@
 #include "Run.hpp"
 #include "MetaWaveformAna.hpp"
 #include "WaveformAna.hpp"
+#include "Baseline.hpp"
+#include "BaselineCalibrator.hpp"
+#include "WaveAna.hpp"
 #include "EventAna.hpp"
 #include "Analysis.hpp"
