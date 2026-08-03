@@ -14,12 +14,18 @@
 #include "EventMetadata.hpp" // kNumADCs / kNumChannels
 #include "Event.hpp"
 #include "Run.hpp"
+#include "Utils.hpp"
 
 #include "TF1.h"
 #include "TFitResultPtr.h"
 #include "TH1F.h"
+#include "TCanvas.h"
+#include "TPaveText.h"
+#include "TStyle.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstddef>
 #include <iomanip>
 #include <iostream>
@@ -49,7 +55,22 @@ struct CalibratorConfig {
 class BaselineCalibrator {
 public:
     explicit BaselineCalibrator(const CalibratorConfig& cfg = CalibratorConfig{})
-        : fCfg(cfg), fBaseline(cfg.baseline_cfg) {}
+        : fCfg(cfg), fBaseline(cfg.baseline_cfg)
+    {
+        for (int adc = 0; adc < kNumADCs; ++adc)
+            for (int ch = 0; ch < kNumChannels; ++ch) {
+                fHist[adc][ch] = nullptr;
+                fFit [adc][ch] = nullptr;
+            }
+    }
+
+    ~BaselineCalibrator() {
+        for (int adc = 0; adc < kNumADCs; ++adc)
+            for (int ch = 0; ch < kNumChannels; ++ch) {
+                delete fHist[adc][ch];
+                delete fFit [adc][ch];
+            }
+    }
 
     /// Process up to cfg.max_events from `run` (calls run.Reset() internally).
     /// For each event, for each (adc, ch), runs Baseline::FindAll() and
@@ -109,6 +130,84 @@ public:
         }
     }
 
+    /// Draw calibrated histograms and fits on a TCanvas, one pad per channel.
+    /// Pauses for user input via PauseExecution().
+    void Draw()
+    {
+        // Collect all channels that have a histogram (fit may have failed)
+        std::vector<std::pair<int,int>> channels;
+        for (int adc = 0; adc < kNumADCs; ++adc)
+            for (int ch = 0; ch < kNumChannels; ++ch)
+                if (fHist[adc][ch] != nullptr)
+                    channels.emplace_back(adc, ch);
+
+        if (channels.empty()) {
+            std::cout << "BaselineCalibrator::Draw: no calibrated channels to draw.\n";
+            return;
+        }
+
+        // Dynamic grid layout
+        const int nPads = static_cast<int>(channels.size());
+        const int nCols = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(nPads))));
+        const int nRows = static_cast<int>(std::ceil(static_cast<double>(nPads) / nCols));
+
+        TCanvas* canvas = new TCanvas("cal_canvas", "Baseline Calibration",
+                                      200, 10, 1400, 900);
+        canvas->Divide(nCols, nRows);
+        gStyle->SetOptStat(0);
+
+        int padIdx = 1;
+        for (const auto& p : channels) {
+            int adc = p.first;
+            int ch  = p.second;
+            canvas->cd(padIdx++);
+            gPad->Clear();
+
+            TH1F* h = fHist[adc][ch];
+            TF1*  f = fFit [adc][ch];
+            const ChannelBaseline& res = fResult[adc][ch];
+
+            // Draw histogram
+            h->SetLineColor(kBlue + 1);
+            h->SetLineWidth(1);
+            h->GetXaxis()->SetTitle("Baseline mean (ADC)");
+            h->GetYaxis()->SetTitle("Windows");
+            h->Draw("HIST");
+
+            // Overlay fit if it exists
+            if (f != nullptr) {
+                f->SetLineColor(res.calibrated ? kRed : kOrange + 1);
+                f->SetLineWidth(2);
+                f->Draw("SAME");
+            }
+
+            // TPaveText: channel identity + fit result
+            TPaveText* pt = new TPaveText(0.55, 0.65, 0.98, 0.98, "NDC");
+            pt->SetFillColor(0);
+            pt->SetBorderSize(1);
+            pt->SetTextSize(0.05);
+            pt->AddText(Form("ADC %d / CH %d", adc, ch));
+            pt->AddText(Form("N windows: %zu", res.n_windows));
+            if (res.calibrated) {
+                pt->AddText(Form("#mu = %.2f ADC", res.mean));
+                pt->AddText(Form("#sigma = %.2f ADC", res.sigma));
+            } else {
+                pt->AddText("Fit FAILED");
+                pt->AddText(Form("histo mean = %.2f", res.mean));
+            }
+            pt->Draw();
+
+            gPad->Update();
+        }
+
+        canvas->cd(0);
+        canvas->SetTitle("Baseline Calibration — all channels");
+        canvas->Update();
+
+        // Pause execution
+        PauseExecution("Baseline calibration drawn | [Enter] continue   [q] quit: ");
+    }
+
 private:
     CalibratorConfig fCfg;
     Baseline         fBaseline;
@@ -117,11 +216,17 @@ private:
     // Raw accumulated baseline means per channel, kept for histogram/fit.
     std::vector<double> fSamples[kNumADCs][kNumChannels];
 
+    /// Retained per-channel histogram and Gaussian fit for Draw().
+    /// Indexed [adc][ch]. nullptr if channel was never calibrated
+    /// (no baseline samples accumulated).
+    TH1F* fHist[kNumADCs][kNumChannels];
+    TF1*  fFit [kNumADCs][kNumChannels];
+
     /// Fit a Gaussian to fSamples[adc][ch] and fill fResult[adc][ch].
     /// The histogram is built over all samples (outliers NOT removed).
     /// The Gaussian fit is restricted to [mean - N*rms, mean + N*rms]
     /// where mean/rms are computed from the histogram itself,
-    /// and N = cfg.fit_range_sigma.
+    /// and N = cfg.fit_range_sigma. Retains histogram and fit for Draw().
     void FitChannel(int adc, int ch)
     {
         std::vector<double>& samples = fSamples[adc][ch];
@@ -140,26 +245,33 @@ private:
         int nBins = std::max(20, static_cast<int>((maxVal - minVal) * 4));
 
         std::string hname = "h_baseline_calib_" + std::to_string(adc) + "_" + std::to_string(ch);
-        TH1F* h = new TH1F(hname.c_str(), "", nBins, loEdge, hiEdge);
-        for (double v : samples) h->Fill(v);
+        fHist[adc][ch] = new TH1F(hname.c_str(), "", nBins, loEdge, hiEdge);
+        for (double v : samples) fHist[adc][ch]->Fill(v);
 
-        double h_mean = h->GetMean();
-        double h_rms  = h->GetRMS();
+        double h_mean = fHist[adc][ch]->GetMean();
+        double h_rms  = fHist[adc][ch]->GetRMS();
 
         double fit_min = h_mean - fCfg.fit_range_sigma * h_rms;
         double fit_max = h_mean + fCfg.fit_range_sigma * h_rms;
 
-        TFitResultPtr fitResult = h->Fit("gaus", "Q0S", "", fit_min, fit_max);
+        std::string fname = "f_baseline_calib_" + std::to_string(adc) + "_" + std::to_string(ch);
+        fFit[adc][ch] = new TF1(fname.c_str(), "gaus", fit_min, fit_max);
+        fFit[adc][ch]->SetParameters(fHist[adc][ch]->GetMaximum(), h_mean, h_rms);
 
-        TF1* f = h->GetFunction("gaus");
-        if (f) {
-            result.mean  = f->GetParameter(1);
-            result.sigma = f->GetParameter(2);
-        }
+        // "Q0NR": quiet, do not draw, do not store in histogram's list, use range
+        TFitResultPtr fitResult = fHist[adc][ch]->Fit(fFit[adc][ch], "Q0NR");
+
         result.n_windows  = samples.size();
-        result.calibrated = (f != nullptr) && (static_cast<int>(fitResult) == 0);
-
-        delete h;
+        if (fitResult.Get() && fitResult->IsValid()) {
+            result.mean       = fFit[adc][ch]->GetParameter(1);
+            result.sigma      = fFit[adc][ch]->GetParameter(2);
+            result.calibrated = true;
+        } else {
+            // Fit failed: store histogram mean as fallback, mark uncalibrated
+            result.mean       = h_mean;
+            result.sigma      = h_rms;
+            result.calibrated = false;
+        }
     }
 };
 

@@ -6,6 +6,7 @@
 // ndlar_light reader API (Waveform, Event, SubRunReader, Run).
 //
 
+#include "Utils.hpp"
 #include "Waveform.hpp"
 #include "EventMetadata.hpp"
 #include "Event.hpp"

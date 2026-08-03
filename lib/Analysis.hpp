@@ -14,6 +14,8 @@
 #include "Run.hpp"
 #include "WaveformAna.hpp"
 #include "WaveAna.hpp"
+#include "Utils.hpp"
+#include "Utils.hpp"
 
 #include "TFile.h"
 #include "TTree.h"
@@ -378,11 +380,9 @@ public:
             canvas->Update();
 
             // --- Wait for user input ---
-            std::cout << "Event " << eventCount
-                      << " - [Enter] next, [q+Enter] quit: " << std::flush;
-            std::string line;
-            std::getline(std::cin, line);
-            if (!line.empty() && (line[0] == 'q' || line[0] == 'Q')) break;
+            if (!PauseExecution("Event " + std::to_string(eventCount)
+                                + " | [Enter] next   [q] quit: "))
+                break;
 
             // Clean up histograms before next event to avoid ROOT memory buildup
             canvas->Clear();
