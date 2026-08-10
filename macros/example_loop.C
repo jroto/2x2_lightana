@@ -22,6 +22,7 @@ void example_loop() {
     int run_number = 1130;
 
     try {
+        std::cout << "Building run from path: " << path << " run number: " << run_number << "\n";
         // --- 1. Build run and select channels (unchanged) ---
         ndlar_light::Run run(path, run_number);
         run.Print();
@@ -42,7 +43,7 @@ void example_loop() {
         calibrator.Calibrate(run);   // reads up to 1000 events, fits Gaussians per channel
         calibrator.Print();          // print calibrated baseline table
         calibrator.Draw();
-        
+
         // --- 3. WaveAna configuration (NEW) ---
         ndlar_light::WaveAnaConfig wana_cfg;
         wana_cfg.baseline_cfg   = cal_cfg.baseline_cfg; // reuse same baseline settings

@@ -34,7 +34,7 @@ public:
     /// `active` is 1 (active) or 0 (inactive).
     /// Throws std::runtime_error on file or parse errors.
     static ChannelMap LoadFromCSV(const std::string& path) {
-        std::cout << "Loading channel map from '" << path << "'..." << std::endl;
+        std::cout << "Loading channel map from '" << path << "'...";
         ChannelMap cm;
         std::ifstream f(path);
         if (!f.is_open())
@@ -61,6 +61,8 @@ public:
                     "ChannelMap::LoadFromCSV: out-of-range entry");
             cm.fChannels[ch.adc][ch.channel] = ch;
         }
+        std::cout << "Done. Loaded channel map with " << kNumADCs << " ADCs and "
+                  << kNumChannels << " channels per ADC." << std::endl;
         return cm;
     }
 

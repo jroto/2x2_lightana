@@ -282,6 +282,7 @@ private:
         // Open each subrun just long enough to count its events, to build
         // the prefix-sum table for random access and TotalEvents(). This
         // keeps only one file open at a time even during setup.
+        std::cout << "Run " << fRunNumber << ": scanning subruns..." << std::endl;
         fSubrunStart.reserve(fSubrunFiles.size() + 1);
         size_t running_total = 0;
         for (const auto& path : fSubrunFiles) {
@@ -314,7 +315,7 @@ private:
             r.ReadRow(lastRow, e);
             fEndTimeMs = e.Meta().GetUTimeMs(0);
         }
-
+        std::cout << "Run: done. Total events = " << fTotalEvents << std::endl;
         Reset();
     }
 
