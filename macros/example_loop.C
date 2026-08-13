@@ -36,8 +36,8 @@ void example_loop() {
         cal_cfg.baseline_cfg.window_ticks      = 30;    // ticks per baseline window
         cal_cfg.baseline_cfg.amp_threshold_adc = 120.0;   // max Amp = max-min in window
         cal_cfg.baseline_cfg.asymmetry_factor  = 3.0;   // max AmpBot/AmpTop ratio
-        cal_cfg.max_events                     = 1000;  // events to use for calibration
-        cal_cfg.fit_range_sigma                = 1.5;   // Gaussian fit range: mean ± 2*RMS
+        cal_cfg.max_events                     = 3000;  // events to use for calibration
+        cal_cfg.fit_range_sigma                = 2.0;   // Gaussian fit range: mean ± 2*RMS
 
         ndlar_light::BaselineCalibrator calibrator(cal_cfg);
         calibrator.Calibrate(run);   // reads up to 1000 events, fits Gaussians per channel

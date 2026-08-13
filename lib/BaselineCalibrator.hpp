@@ -32,6 +32,7 @@
 #include <ostream>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace ndlar_light {
 
@@ -64,48 +65,61 @@ public:
             }
     }
 
-    ~BaselineCalibrator() {
-        for (int adc = 0; adc < kNumADCs; ++adc)
-            for (int ch = 0; ch < kNumChannels; ++ch) {
-                delete fHist[adc][ch];
-                delete fFit [adc][ch];
-            }
+    ~BaselineCalibrator()
+    {
+        ClearCalibration();
     }
 
-    /// Process up to cfg.max_events from `run` (calls run.Reset() internally).
-    /// For each event, for each (adc, ch), runs Baseline::FindAll() and
-    /// accumulates all accepted window means into per-channel storage.
-    /// After accumulation, fits a Gaussian per channel.
+    /// Process up to cfg.max_events from `run`.
+    /// Only channels selected in the Run channel map are processed.
+    /// Each call starts a fresh, independent calibration.
     void Calibrate(Run& run)
     {
+        // Discard samples, results, histograms, and fits from any
+        // previous calibration before processing the current selection.
+        ClearCalibration();
+
+        // Reset first so the Run recreates its reader using the current
+        // channel-map selection.
         run.Reset();
+
+        // Take one stable snapshot of the channels to calibrate.
+        fSelectedChannels = run.GetSelectedChannels();
+
         std::size_t nProcessed = 0;
 
         while (run.HasNext() && nProcessed < fCfg.max_events) {
             const Event& event = run.NextEvent();
             ++nProcessed;
 
-            for (int adc = 0; adc < kNumADCs; ++adc) {
-                for (int ch = 0; ch < kNumChannels; ++ch) {
-                    if (!event.IsValid(adc, ch)) continue;
+            // Iterate only over the selected channels, not all 8 x 64 slots.
+            for (const auto& channel : fSelectedChannels) {
+                const int adc = channel.first;
+                const int ch  = channel.second;
 
-                    const Waveform& wf = event.GetWaveform(adc, ch);
-                    std::vector<double> samples(wf.Size());
-                    for (std::size_t s = 0; s < wf.Size(); ++s) samples[s] = wf.GetSample(s);
+                if (!event.IsValid(adc, ch)) continue;
 
-                    std::vector<BaselineSegment> segs = fBaseline.FindAll(samples);
-                    for (const auto& seg : segs) {
-                        fSamples[adc][ch].push_back(seg.mean);
-                    }
+                const Waveform& wf = event.GetWaveform(adc, ch);
+
+                std::vector<double> samples(wf.Size());
+                for (std::size_t s = 0; s < wf.Size(); ++s) {
+                    samples[s] = wf.GetSample(s);
+                }
+
+                const std::vector<BaselineSegment> segs =
+                    fBaseline.FindAll(samples);
+
+                for (const auto& seg : segs) {
+                    fSamples[adc][ch].push_back(seg.mean);
                 }
             }
         }
 
-        for (int adc = 0; adc < kNumADCs; ++adc)
-            for (int ch = 0; ch < kNumChannels; ++ch)
-                FitChannel(adc, ch);
+        // Fit only the channels selected for this calibration.
+        for (const auto& channel : fSelectedChannels) {
+            FitChannel(channel.first, channel.second);
+        }
     }
-
     /// Access the calibrated baseline for a channel.
     const ChannelBaseline& GetBaseline(int adc, int ch) const
     {
@@ -113,28 +127,45 @@ public:
     }
 
     /// Print a summary table of calibrated baselines to os.
+    /// Print calibrated baselines for channels selected in the most
+    /// recent call to Calibrate().
     void Print(std::ostream& os = std::cout) const
     {
         os << std::left
-           << std::setw(6) << "ADC" << std::setw(6) << "CH"
-           << std::setw(12) << "mean" << std::setw(12) << "sigma"
-           << std::setw(10) << "n_wins" << "calibrated\n";
-        for (int adc = 0; adc < kNumADCs; ++adc) {
-            for (int ch = 0; ch < kNumChannels; ++ch) {
-                const ChannelBaseline& b = fResult[adc][ch];
-                os << std::left
-                   << std::setw(6) << adc << std::setw(6) << ch
-                   << std::setw(12) << b.mean << std::setw(12) << b.sigma
-                   << std::setw(10) << b.n_windows << b.calibrated << "\n";
-            }
+           << std::setw(6)  << "ADC"
+           << std::setw(6)  << "CH"
+           << std::setw(12) << "mean"
+           << std::setw(12) << "sigma"
+           << std::setw(10) << "n_wins"
+           << "calibrated\n";
+
+        if (fSelectedChannels.empty()) {
+            os << "No channels were selected for the most recent calibration.\n";
+            return;
+        }
+
+        for (const auto& channel : fSelectedChannels) {
+            const int adc = channel.first;
+            const int ch  = channel.second;
+
+            const ChannelBaseline& b = fResult[adc][ch];
+
+            os << std::left
+               << std::setw(6)  << adc
+               << std::setw(6)  << ch
+               << std::setw(12) << b.mean
+               << std::setw(12) << b.sigma
+               << std::setw(10) << b.n_windows
+               << b.calibrated
+               << "\n";
         }
     }
-
     /// Draw calibrated histograms and fits on a TCanvas, one pad per channel.
     /// Pauses for user input via PauseExecution().
     void Draw()
     {
-        // Collect all channels that have a histogram (fit may have failed)
+        // Collect selected channels that have a histogram
+        // (the fit itself may have failed).
         std::vector<std::pair<int,int>> channels;
         for (int adc = 0; adc < kNumADCs; ++adc)
             for (int ch = 0; ch < kNumChannels; ++ch)
@@ -201,7 +232,7 @@ public:
         }
 
         canvas->cd(0);
-        canvas->SetTitle("Baseline Calibration — all channels");
+        canvas->SetTitle("Baseline Calibration — selected channels");
         canvas->Update();
 
         // Pause execution
@@ -213,6 +244,9 @@ private:
     Baseline         fBaseline;
     ChannelBaseline  fResult[kNumADCs][kNumChannels];
 
+    // Snapshot of Run-selected channels used by the latest Calibrate() call.
+    std::vector<std::pair<int, int>> fSelectedChannels;
+
     // Raw accumulated baseline means per channel, kept for histogram/fit.
     std::vector<double> fSamples[kNumADCs][kNumChannels];
 
@@ -222,6 +256,25 @@ private:
     TH1F* fHist[kNumADCs][kNumChannels];
     TF1*  fFit [kNumADCs][kNumChannels];
 
+    /// Delete ROOT objects and reset all state from a prior calibration.
+    /// Safe to call when no calibration has been performed yet.
+    void ClearCalibration()
+    {
+        for (int adc = 0; adc < kNumADCs; ++adc) {
+            for (int ch = 0; ch < kNumChannels; ++ch) {
+                delete fHist[adc][ch];
+                delete fFit[adc][ch];
+
+                fHist[adc][ch] = nullptr;
+                fFit[adc][ch]  = nullptr;
+
+                fSamples[adc][ch].clear();
+                fResult[adc][ch] = ChannelBaseline{};
+            }
+        }
+
+        fSelectedChannels.clear();
+    }
     /// Fit a Gaussian to fSamples[adc][ch] and fill fResult[adc][ch].
     /// The histogram is built over all samples (outliers NOT removed).
     /// The Gaussian fit is restricted to [mean - N*rms, mean + N*rms]
@@ -242,7 +295,7 @@ private:
 
         double loEdge = minVal - 1.0;
         double hiEdge = maxVal + 1.0;
-        int nBins = std::max(20, static_cast<int>((maxVal - minVal) * 4));
+        int nBins = std::max(20, static_cast<int>((maxVal - minVal) * 3));
 
         std::string hname = "h_baseline_calib_" + std::to_string(adc) + "_" + std::to_string(ch);
         fHist[adc][ch] = new TH1F(hname.c_str(), "", nBins, loEdge, hiEdge);
@@ -259,7 +312,7 @@ private:
         fFit[adc][ch]->SetParameters(fHist[adc][ch]->GetMaximum(), h_mean, h_rms);
 
         // "Q0NR": quiet, do not draw, do not store in histogram's list, use range
-        TFitResultPtr fitResult = fHist[adc][ch]->Fit(fFit[adc][ch], "Q0NR");
+        TFitResultPtr fitResult = fHist[adc][ch]->Fit(fFit[adc][ch], "LER");
 
         result.n_windows  = samples.size();
         if (fitResult.Get() && fitResult->IsValid()) {

@@ -43,6 +43,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace ndlar_light {
 
@@ -261,7 +262,23 @@ public:
         r.Print(os);
         return os;
     }
+    /// Return a snapshot of all currently selected channels.
+    /// A channel is selected when ChannelMap::IsActive(adc, ch) is true.
+    /// The returned list is ordered by ADC and then channel number.
+    std::vector<std::pair<int, int>> GetSelectedChannels() const
+    {
+        std::vector<std::pair<int, int>> selected;
 
+        for (int adc = 0; adc < kNumADCs; ++adc) {
+            for (int ch = 0; ch < kNumChannels; ++ch) {
+                if (fChannelMap.IsActive(adc, ch)) {
+                    selected.emplace_back(adc, ch);
+                }
+            }
+        }
+
+        return selected;
+    }
 private:
     /// Tries to load the default channel-map CSV; falls back silently to
     /// an all-channels-active map if it's missing/unreadable, so Run
