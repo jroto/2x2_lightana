@@ -188,6 +188,15 @@ public:
     /// Read-only access to the current channel map.
     const ChannelMap& GetChannelMap() const { return fChannelMap; }
 
+    /// UTC Unix timestamp of the first event in this run, in whole seconds.
+    /// Derived from fStartTimeMs, which is populated in Init() by reading
+    /// row 0 of the first subrun file. Use this as the `time` field for
+    /// HistName to embed start-time provenance in histogram names.
+    std::uint64_t StartTimeUnixSeconds() const { return fStartTimeMs / 1000; }
+
+    /// UTC Unix timestamp of the first event in this run, in milliseconds.
+    std::uint64_t StartTimeUnixMilliseconds() const { return fStartTimeMs; }
+
     /// Prints a human-readable summary of the run: run number, event/
     /// subrun counts, per-subrun file names and event counts, start/end
     /// times (UTC) and duration, first-event ADC serial numbers, and

@@ -63,8 +63,17 @@ void example_loop() {
                     wf, isValid, wana_cfg, fallback);
             });
 
-        // --- 5. Run the interactive loop (unchanged call) ---
-        analysis.Loop();
+        // --- 5. Run the interactive two-row loop ---
+        // Loop2() shows, per selected channel, in a 2-row canvas:
+        //   top row:    current-event waveform with baseline segments and hits;
+        //   bottom row: cumulative individual-hit charge distribution
+        //               accumulated across all events displayed so far.
+//        analysis.Loop2();
+        analysis.process();
+        analysis.Dump("analysis.root");
+
+        // Alternatively, use the single-row waveform viewer:
+        // analysis.Loop();
 
         std::cout << "Run has " << run.NumSubruns() << " subrun(s), "
                   << run.TotalEvents() << " total events.\n";

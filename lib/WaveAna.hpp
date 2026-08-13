@@ -191,7 +191,8 @@ private:
     void FindHits(std::vector<double>& working, double baseline, double threshold_adc)
     {
         const int N = static_cast<int>(working.size());
-        const double cut = baseline + threshold_adc;
+        const double cut = baseline;
+//        const double cut = baseline + threshold_adc;
 
         while (true) {
             int i_max = static_cast<int>(

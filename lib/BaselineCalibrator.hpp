@@ -312,7 +312,8 @@ private:
         fFit[adc][ch]->SetParameters(fHist[adc][ch]->GetMaximum(), h_mean, h_rms);
 
         // "Q0NR": quiet, do not draw, do not store in histogram's list, use range
-        TFitResultPtr fitResult = fHist[adc][ch]->Fit(fFit[adc][ch], "LER");
+        TFitResultPtr fitResult = fHist[adc][ch]->Fit(fFit[adc][ch], "NERS");
+        const int fitStatus = fitResult;
 
         result.n_windows  = samples.size();
         if (fitResult.Get() && fitResult->IsValid()) {
@@ -324,6 +325,12 @@ private:
             result.mean       = h_mean;
             result.sigma      = h_rms;
             result.calibrated = false;
+            std::cerr << "BaselineCalibrator: Gaussian fit rejected for ADC "
+                    << adc << ", CH " << ch
+                    << " | ROOT status = " << fitStatus
+                    << " | result available = "
+                    << (fitResult.Get() != nullptr)
+                    << "\n";
         }
     }
 };

@@ -15,7 +15,6 @@
 #include "WaveformAna.hpp"
 #include "WaveAna.hpp"
 #include "Utils.hpp"
-#include "Utils.hpp"
 
 #include "TFile.h"
 #include "TTree.h"
@@ -112,18 +111,6 @@ public:
     /// automatically appear here without touching this method.
     void Dump(const std::string& filename, const std::string& treename = "waveforms") const
     {
-        if (fEvents.empty()) {
-            TFile outfile(filename.c_str(), "RECREATE");
-            if (outfile.IsZombie()) {
-                throw std::runtime_error("Analysis::Dump: failed to create ROOT file '" + filename + "'");
-            }
-            TTree* tree = new TTree(treename.c_str(), "NDLAr light analysis per waveform");
-            outfile.cd();
-            tree->Write();
-            outfile.Close();
-            return;
-        }
-
         // Full set of registered analysis parameter names - assumed to be
         // the complete union across all analyzer implementations, since
         // each registers its keys once via MetaWaveformAna::RegisterParam().
@@ -221,6 +208,8 @@ public:
         outfile.cd();
         tree->Write();
         outfile.Close();
+        std::cout << "Analysis::Dump: wrote " << tree->GetEntries()
+                  << " entries to '" << filename << "'\n";
     }
 
     /// Interactive, on-the-fly event display: iterates the referenced Run
@@ -390,6 +379,209 @@ public:
         }
 
         std::cout << "Analysis::Loop: finished after " << eventCount << " events.\n";
+    }
+
+    /// Interactive two-row event display with cumulative per-channel charge spectra.
+    ///
+    /// Layout: the canvas is divided into N columns × 2 rows, where N is the
+    /// number of selected channels.
+    ///
+    ///   Top row    (pads 1 .. N):     per-event waveform display, identical to
+    ///                                  Loop() — waveform, baseline segments,
+    ///                                  hit boxes/markers, analysis parameters.
+    ///   Bottom row (pads N+1 .. 2N):  cumulative histogram of individual Hit::charge
+    ///                                  values accumulated from the start of this
+    ///                                  Loop2() invocation through the current event.
+    ///                                  The histogram is NOT reset between events.
+    ///
+    /// Does not require process() to have been called first; resets the Run
+    /// internally. If the factory does not produce WaveAna the top row still
+    /// works normally and the bottom histograms simply remain empty.
+    ///
+    /// Navigation: [Enter] = next event, [q+Enter] = quit.
+    void Loop2(int maxEvents = -1)
+    {
+        // --- Snapshot selected channels once (ADC-major, channel-major) ---
+        const auto selectedChannels = fRun.GetSelectedChannels();
+
+        const int nSelected = static_cast<int>(selectedChannels.size());
+
+        if (nSelected == 0) {
+            std::cout << "Analysis::Loop2: no active channels in ChannelMap. "
+                      << "Use Run::SelectChannel() to activate channels.\n";
+            return;
+        }
+
+        // --- Create canvas: N columns × 2 rows ---
+        const int canvasWidth  = std::max(1200, 450 * nSelected);
+        const int canvasHeight = 900;
+
+        // Use a unique instance counter to avoid ROOT name clashes across calls.
+        static std::size_t sLoop2Instance = 0;
+        const std::size_t instance = sLoop2Instance++;
+
+        std::string cname = Form("Loop2_canvas_%zu", instance);
+        TCanvas* canvas = new TCanvas(cname.c_str(), "Analysis::Loop2",
+                                      200, 10, canvasWidth, canvasHeight);
+        canvas->Divide(nSelected, 2);
+        gStyle->SetOptStat(0);
+
+        // --- Create persistent per-channel charge histograms (one per selected ch) ---
+        constexpr int    kChargeHistBins = 200;
+        constexpr double kChargeHistMin  = 0.0;
+        constexpr double kChargeHistMax  = 30000.0;
+
+        std::vector<TH1F*> chargeHists(static_cast<std::size_t>(nSelected), nullptr);
+        for (int i = 0; i < nSelected; ++i) {
+            int adc = selectedChannels[static_cast<std::size_t>(i)].first;
+            int ch  = selectedChannels[static_cast<std::size_t>(i)].second;
+            std::string hname = Form("h_hit_charge_adc%d_ch%d_loop2%zu", adc, ch, instance);
+            TH1F* hc = new TH1F(hname.c_str(),
+                                 Form("ADC %d / CH %d cumulative hit charge", adc, ch),
+                                 kChargeHistBins, kChargeHistMin, kChargeHistMax);
+            hc->SetDirectory(nullptr); // decouple from ROOT directory
+            hc->GetXaxis()->SetTitle("Hit charge (ADC counts #times ticks)");
+            hc->GetYaxis()->SetTitle("Hits");
+            hc->SetLineColor(kBlue + 1);
+            hc->SetFillColor(kAzure + 7);
+            hc->SetFillStyle(1001);
+            chargeHists[static_cast<std::size_t>(i)] = hc;
+        }
+
+        // --- Reset run and iterate ---
+        fRun.Reset();
+        int eventCount = 0;
+        const ChannelMap& chmap   = fRun.GetChannelMap();
+        const auto& paramNames    = MetaWaveformAna::ParamNames();
+
+        while (fRun.HasNext()) {
+            if (maxEvents > 0 && eventCount >= maxEvents) break;
+
+            const Event& event = fRun.NextEvent();
+            ++eventCount;
+
+            // --- Top row: clear & redraw waveform pads ---
+            for (int i = 0; i < nSelected; ++i) {
+                int adc = selectedChannels[static_cast<std::size_t>(i)].first;
+                int ch  = selectedChannels[static_cast<std::size_t>(i)].second;
+
+                canvas->cd(i + 1);  // top row: pads 1..N
+                gPad->Clear();
+
+                if (!event.IsValid(adc, ch)) {
+                    TPaveText* msg = new TPaveText(0.1, 0.4, 0.9, 0.6, "NDC");
+                    msg->AddText(Form("ADC %d / CH %d", adc, ch));
+                    msg->AddText("(inactive / invalid)");
+                    msg->SetFillColor(0);
+                    msg->SetTextColor(kGray + 1);
+                    msg->Draw();
+                    gPad->Update();
+                    continue;
+                }
+
+                const Waveform& wf = event.GetWaveform(adc, ch);
+                std::unique_ptr<MetaWaveformAna> ptr = fFactory(wf, true);
+                WaveAna* wa = dynamic_cast<WaveAna*>(ptr.get());
+
+                // Waveform histogram
+                std::string hname = Form("h2_adc%d_ch%d_ev%d_inst%zu",
+                                         adc, ch, eventCount, instance);
+                TH1F* h = new TH1F(hname.c_str(), "",
+                                    static_cast<int>(kNumSamples), 0,
+                                    static_cast<double>(kNumSamples));
+                for (int s = 0; s < static_cast<int>(kNumSamples); ++s)
+                    h->SetBinContent(s + 1, wf.GetSample(s));
+
+                const Channel& info = chmap.GetChannel(adc, ch);
+                std::string title = Form(
+                    "ADC %d / CH %d | TPC %d | trap: %s;Ticks;ADC counts",
+                    adc, ch, info.tpc, info.trap_type.c_str());
+                h->SetTitle(title.c_str());
+                h->SetLineColor(kBlue + 1);
+                h->Draw("HIST");
+
+                if (wa != nullptr) {
+                    // Baseline segments
+                    for (const auto& seg : wa->Baselines()) {
+                        TLine* line = new TLine(seg.tick_start, seg.mean,
+                                                seg.tick_end,   seg.mean);
+                        line->SetLineColor(kGreen + 2);
+                        line->SetLineWidth(2);
+                        line->Draw();
+                    }
+
+                    // Hit boxes and peak markers
+                    double baseline = wa->OverallBaseline();
+                    for (const auto& hit : wa->Hits()) {
+                        TBox* box = new TBox(hit.tick_start, baseline,
+                                              hit.tick_end,   baseline + hit.amplitude);
+                        box->SetFillColor(kRed);
+                        box->SetFillStyle(3003);
+                        box->Draw();
+
+                        TMarker* marker = new TMarker(
+                            hit.tick_peak,
+                            static_cast<double>(wf.GetSample(
+                                static_cast<std::size_t>(hit.tick_peak))),
+                            20);
+                        marker->SetMarkerColor(kRed);
+                        marker->Draw();
+
+                        // Accumulate individual hit charge into persistent histogram
+                        chargeHists[static_cast<std::size_t>(i)]->Fill(hit.charge);
+                    }
+                }
+
+                // Analysis-parameter overlay
+                if (!paramNames.empty()) {
+                    TPaveText* pt = new TPaveText(0.55, 0.72, 0.98, 0.98, "NDC");
+                    pt->SetFillColor(0);
+                    pt->SetFillStyle(1001);
+                    pt->SetBorderSize(1);
+                    pt->SetTextSize(0.04);
+                    for (std::size_t p = 0; p < paramNames.size(); ++p) {
+                        if (ptr->HasParamIndex(p)) {
+                            std::string pline = Form("%s = %.4g",
+                                paramNames[p].c_str(),
+                                ptr->GetParamByIndex(p));
+                            pt->AddText(pline.c_str());
+                        }
+                    }
+                    pt->Draw();
+                }
+
+                gPad->Update();
+            }
+
+            // --- Bottom row: redraw cumulative charge histograms ---
+            for (int i = 0; i < nSelected; ++i) {
+                canvas->cd(nSelected + i + 1);  // bottom row: pads N+1..2N
+                gPad->Clear();
+                chargeHists[static_cast<std::size_t>(i)]->Draw("HIST");
+                gPad->Update();
+            }
+
+            // Canvas title
+            canvas->cd(0);
+            std::string canvasTitle = Form(
+                "Loop2 | Event %d | ID %llu | [Enter] next | [q] quit",
+                eventCount,
+                static_cast<unsigned long long>(event.Meta().GetId()));
+            canvas->SetTitle(canvasTitle.c_str());
+            canvas->Update();
+
+            // Pause for user input (processes ROOT GUI events while waiting)
+            if (!PauseExecution("Loop2 Event " + std::to_string(eventCount)
+                                + " | [Enter] next   [q] quit: "))
+                break;
+        }
+
+        std::cout << "Analysis::Loop2: finished after " << eventCount << " events.\n";
+
+        // Clean up charge histograms when done
+        for (int i = 0; i < nSelected; ++i) {
+            delete chargeHists[static_cast<std::size_t>(i)];
+        }
     }
 
 private:

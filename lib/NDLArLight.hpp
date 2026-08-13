@@ -9,6 +9,8 @@
 #include "Utils.hpp"
 #include "Waveform.hpp"
 #include "EventMetadata.hpp"
+#include "HistName.hpp"
+#include "HistCollection.hpp"
 #include "Event.hpp"
 #include "Channel.hpp"
 #include "ChannelMap.hpp"
