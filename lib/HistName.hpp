@@ -5,13 +5,13 @@
 // Pure C++ (no ROOT dependency) utility class that creates, validates, and
 // parses deterministic ROOT histogram names from structured analysis metadata.
 //
-// Canonical name grammar:
+// Canonical name grammar (hyphen-separated field labels):
 //
-//   h_adc{adc}_ch{ch}_run{run}_time{time}_mode{mode}_tag{tag}
+//   h-adc{adc}-ch{ch}-run{run}-time{time}-mode{mode}-tag{tag}
 //
 // Example:
 //
-//   h_adc2_ch4_run1130_time1786665600_modecharge_tagvbrscan
+//   h-adc2-ch4-run1130-time1786665600-modehit_charge-tagvbr_scan_01
 //
 // Field encoding:
 //
@@ -20,11 +20,22 @@
 //   run   — signed decimal integer; -1 means "no run number" (Run built
 //            from a file list), values < -1 are rejected
 //   time  — UTC Unix timestamp in whole seconds (std::uint64_t); zero is valid
-//   mode  — non-empty string, restricted to [A-Za-z0-9_-]+
-//   tag   — non-empty string, restricted to [A-Za-z0-9_-]+
+//   mode  — non-empty string, restricted to [A-Za-z0-9_]+
+//            (underscores allowed; hyphens are NOT allowed — they serve as
+//            field separators in the canonical name)
+//   tag   — non-empty string, restricted to [A-Za-z0-9_]+
+//            (same restriction as mode)
 //
-// Spaces, slashes, dots, colons, percent signs, quotes, and all other
-// characters outside [A-Za-z0-9_-] are rejected in mode and tag.
+// Characters rejected in mode and tag: hyphens (-), spaces, slashes, dots,
+// colons, percent signs, quotes, and everything else outside [A-Za-z0-9_].
+//
+// Rationale for the new grammar
+// -------------------------------
+// Field labels are separated by hyphens (-).  Because hyphens are also
+// forbidden INSIDE mode and tag, the -tag delimiter is always unambiguous
+// even when mode and tag contain underscores.  The previous grammar used
+// underscores everywhere, making parsing ambiguous for values like
+// "hit_charge" or "vbr_scan_01".
 //
 // HistName is a logical metadata encoding — it does not own any ROOT object
 // and does not implicitly associate with any ROOT TDirectory or TH1.
@@ -58,7 +69,8 @@ public:
     ///   - adc is outside [0, kNumADCs)
     ///   - ch  is outside [0, kNumChannels)
     ///   - run < -1
-    ///   - mode or tag are empty or contain characters outside [A-Za-z0-9_-]
+    ///   - mode or tag are empty or contain characters outside [A-Za-z0-9_]
+    ///     (hyphens are NOT allowed — they are the field separators)
     HistName(int adc,
              int ch,
              int run,
@@ -78,15 +90,16 @@ public:
     const std::string& Tag()  const { return fTag;  }
 
     /// Return the canonical ROOT-safe histogram name for this metadata.
+    /// Format: h-adc{adc}-ch{ch}-run{run}-time{time}-mode{mode}-tag{tag}
     /// The result always round-trips exactly through Parse().
     std::string ToString() const
     {
-        return "h_adc"  + std::to_string(fAdc)
-             + "_ch"    + std::to_string(fCh)
-             + "_run"   + std::to_string(fRun)
-             + "_time"  + std::to_string(fTime)
-             + "_mode"  + fMode
-             + "_tag"   + fTag;
+        return "h-adc"   + std::to_string(fAdc)
+             + "-ch"     + std::to_string(fCh)
+             + "-run"    + std::to_string(fRun)
+             + "-time"   + std::to_string(fTime)
+             + "-mode"   + fMode
+             + "-tag"    + fTag;
     }
 
     /// Parse and validate a canonical histogram name.
@@ -114,25 +127,22 @@ public:
                          HistName& output,
                          std::string* errorMessage = nullptr)
     {
-        // The regex captures mode and tag correctly even when they contain
-        // underscores, because:
-        //   - the _tag literal label is a fixed anchor;
-        //   - mode is captured as everything between _mode and _tag;
-        //   - tag is captured as everything after _tag to end-of-string.
+        // Strict regex with explicit capture groups.
+        // Hyphens separate the fixed field labels; because hyphens are also
+        // forbidden inside mode and tag, the -tag delimiter is unambiguous
+        // even when mode/tag contain underscores.
         //
-        // Grammar (simplified):
-        //   h_adc<int>_ch<int>_run<-?int>_time<uint>_mode<text>_tag<text>
-        //
-        // Both <text> fields match [A-Za-z0-9_-]+ which is enforced by
-        // the constructor's text-component validator after extraction.
+        // Grammar:
+        //   h-adc<int>-ch<int>-run<-?int>-time<uint>-mode<text>-tag<text>
+        // where <text> = [A-Za-z0-9_]+
         static const std::regex kPattern(
-            R"(^h_adc(-?\d+)_ch(\d+)_run(-?\d+)_time(\d+)_mode([A-Za-z0-9_-]+)_tag([A-Za-z0-9_-]+)$)");
+            R"(^h-adc(\d+)-ch(\d+)-run(-?\d+)-time(\d+)-mode([A-Za-z0-9_]+)-tag([A-Za-z0-9_]+)$)");
 
         std::smatch m;
         if (!std::regex_match(name, m, kPattern)) {
             if (errorMessage)
                 *errorMessage = "does not match canonical pattern "
-                                "h_adc{adc}_ch{ch}_run{run}_time{time}_mode{mode}_tag{tag}";
+                                "h-adc{adc}-ch{ch}-run{run}-time{time}-mode{mode}-tag{tag}";
             return false;
         }
 
@@ -177,13 +187,14 @@ public:
     }
 
     /// Return true if `value` is a valid text component for mode or tag:
-    /// non-empty, only [A-Za-z0-9_-].
+    /// non-empty, only [A-Za-z0-9_].
+    /// Hyphens (-) are NOT allowed — they serve as field separators in the
+    /// canonical histogram name format.
     static bool IsValidTextComponent(const std::string& value)
     {
         if (value.empty()) return false;
         for (char c : value) {
-            if (!std::isalnum(static_cast<unsigned char>(c))
-                && c != '_' && c != '-') {
+            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') {
                 return false;
             }
         }
@@ -229,12 +240,12 @@ private:
         }
         if (!IsValidTextComponent(mode)) {
             if (err) *err = "mode \"" + mode + "\" is empty or contains "
-                           "characters outside [A-Za-z0-9_-]";
+                           "characters outside [A-Za-z0-9_] (hyphens are not allowed)";
             return false;
         }
         if (!IsValidTextComponent(tag)) {
             if (err) *err = "tag \"" + tag + "\" is empty or contains "
-                           "characters outside [A-Za-z0-9_-]";
+                           "characters outside [A-Za-z0-9_] (hyphens are not allowed)";
             return false;
         }
         return true;

@@ -312,7 +312,7 @@ private:
         fFit[adc][ch]->SetParameters(fHist[adc][ch]->GetMaximum(), h_mean, h_rms);
 
         // "Q0NR": quiet, do not draw, do not store in histogram's list, use range
-        TFitResultPtr fitResult = fHist[adc][ch]->Fit(fFit[adc][ch], "NERS");
+        TFitResultPtr fitResult = fHist[adc][ch]->Fit(fFit[adc][ch], "NERSQ");
         const int fitStatus = fitResult;
 
         result.n_windows  = samples.size();

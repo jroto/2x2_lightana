@@ -16,19 +16,17 @@
 
 #include <iostream>
 
-void example_loop() {
-
-    std::string path = "/pnfs/dune/scratch/users/jsoto/NDLAr_Run3/VBRscan_20260716/";
-    int run_number = 1130;
+void Dump(string path, int run_number, float voltage)
+{
 
     try {
         std::cout << "Building run from path: " << path << " run number: " << run_number << "\n";
         // --- 1. Build run and select channels (unchanged) ---
         ndlar_light::Run run(path, run_number);
         run.Print();
-//        run.ResetChannels(false);
-//        run.SelectChannel(2, 4, true);
-//        run.SelectChannel(2, 5, true);
+        run.ResetChannels(false);
+        run.SelectChannel(2, 4, true);
+        run.SelectChannel(2, 5, true);
 
         // --- 2. Baseline calibration (NEW) ---
         // Configure the baseline estimator and calibrator
@@ -42,7 +40,7 @@ void example_loop() {
         ndlar_light::BaselineCalibrator calibrator(cal_cfg);
         calibrator.Calibrate(run);   // reads up to 1000 events, fits Gaussians per channel
         calibrator.Print();          // print calibrated baseline table
-        calibrator.Draw();
+//        calibrator.Draw();
 
         // --- 3. WaveAna configuration (NEW) ---
         ndlar_light::WaveAnaConfig wana_cfg;
@@ -70,7 +68,7 @@ void example_loop() {
         //               accumulated across all events displayed so far.
 //        analysis.Loop2();
         analysis.process();
-        analysis.DumpChargeHistograms("analysis.root","SPE");
+        analysis.DumpChargeHistograms(Form("GainHist.root"),"VBR");
 
         // Alternatively, use the single-row waveform viewer:
         // analysis.Loop();
@@ -81,4 +79,42 @@ void example_loop() {
     } catch (const std::exception& e) {
         std::cerr << "example_loop error: " << e.what() << std::endl;
     }
+}
+void Gain_process() {
+
+
+struct RunTable {
+    int run_number;
+    float voltage;
+    int VGAgain;
+};
+
+    RunTable run_table[] = {
+        {1121, 51, 120},
+        {1122, 51.5,120},
+        {1123, 52},
+        {1124, 52.5},
+        {1125, 53},
+        {1126, 53.5},
+        {1127, 54.0},
+        {1128, 54.5},
+        {1129, 55.0},
+        {1130, 55.5},
+        {1131, 56.0},
+        {1132, 56.5},
+        {1133, 57},
+        {1134, 57.5},
+        {1135, 58},
+    };
+    if(0)
+    {
+        TFile file("GainHist.root", "RECREATE");
+        file.Close();
+        std::string path = "/pnfs/dune/scratch/users/jsoto/NDLAr_Run3/VBRscan_20260716/";
+        for(auto r : run_table) Dump(path,r.run_number,r.voltage);
+    }
+    HistCollection collection;
+    collection.Load("GainHist.root");
+
+
 }

@@ -237,9 +237,9 @@ public:
     /// Throws std::runtime_error  if the file cannot be created.
     /// Throws std::logic_error    if the central name/metadata invariant is
     ///                            violated (should never happen in normal use).
-    void Dump(const std::string& filename) const
+    void Dump(const std::string& filename, string option="RECREATE") const
     {
-        TFile file(filename.c_str(), "RECREATE");
+        TFile file(filename.c_str(), option.c_str());
         if (file.IsZombie()) {
             throw std::runtime_error(
                 "HistCollection::Dump: cannot create ROOT file \""

@@ -15,6 +15,7 @@
 #include "WaveformAna.hpp"
 #include "WaveAna.hpp"
 #include "Utils.hpp"
+#include "HistCollection.hpp"
 
 #include "TFile.h"
 #include "TTree.h"
@@ -76,12 +77,16 @@ public:
     {
         fEvents.clear();
         fRun.Reset();
+        int counter = 0;
 
         while (fRun.HasNext()) {
             const Event& event = fRun.NextEvent();
 
             EventAna ana;
             ana.Meta() = event.Meta();
+            if(counter % 1000 == 0) {
+                std::cout << "Processing event " << event.Meta().GetId() << " (event number " << event.Meta().GetEventNumber() << ")" << std::endl;
+            }
 
             for (int adc = 0; adc < kNumADCs; ++adc) {
                 for (int ch = 0; ch < kNumChannels; ++ch) {
@@ -92,6 +97,7 @@ public:
             }
 
             fEvents.push_back(std::move(ana));
+            counter++;
         }
     }
 
@@ -584,6 +590,132 @@ public:
         }
     }
 
+    /// Build one individual-hit charge histogram per currently selected
+    /// channel from the results of process(), then dump them to a ROOT file
+    /// through HistCollection.
+    ///
+    /// Each histogram receives one Fill(hit.charge) call per WaveAna hit.
+    /// This method uses fEvents only: it never resets, reads, or re-analyses
+    /// the Run.
+    void DumpChargeHistograms(
+        const std::string& filename,
+        const std::string& tag) const
+    {
+        if (fEvents.empty()) {
+            throw std::logic_error(
+                "Analysis::DumpChargeHistograms: no processed events; "
+                "call Analysis::process() before dumping charge histograms");
+        }
+
+        // Take one stable snapshot. Each selected channel gets exactly one
+        // output histogram, including channels for which no hit is found.
+        const std::vector<std::pair<int, int>> selectedChannels =
+            fRun.GetSelectedChannels();
+
+        if (selectedChannels.empty()) {
+            throw std::logic_error(
+                "Analysis::DumpChargeHistograms: no channels are selected");
+        }
+
+        constexpr int    kChargeHistBins = 200;
+        constexpr double kChargeHistMin  = 0.0;
+        constexpr double kChargeHistMax  = 30000.0;
+
+        struct ChargeHistogram {
+            HistName metadata;
+            std::unique_ptr<TH1F> histogram;
+        };
+
+        std::vector<ChargeHistogram> chargeHistograms;
+        chargeHistograms.reserve(selectedChannels.size());
+
+        // Create every selected-channel histogram before examining events.
+        for (const auto& channel : selectedChannels) {
+            const int adc = channel.first;
+            const int ch  = channel.second;
+
+            const HistName metadata(
+                adc,
+                ch,
+                fRun.RunNumber(),
+                fRun.StartTimeUnixSeconds(),
+                "charge",
+                tag);
+
+            // This temporary ROOT name is irrelevant: HistCollection::Add()
+            // replaces it with metadata.ToString() when storing the clone.
+            const std::string temporaryName =
+                "tmp_charge_adc" + std::to_string(adc) +
+                "_ch" + std::to_string(ch);
+
+            const std::string title =
+                "ADC " + std::to_string(adc) +
+                " / CH " + std::to_string(ch) +
+                " individual hit charge;"
+                "Hit charge (ADC counts #times ticks);Hits";
+
+            std::unique_ptr<TH1F> histogram(new TH1F(
+                temporaryName.c_str(),
+                title.c_str(),
+                kChargeHistBins,
+                kChargeHistMin,
+                kChargeHistMax));
+
+            // The temporary histogram is owned here, not by gDirectory.
+            histogram->SetDirectory(nullptr);
+            histogram->SetLineColor(kBlue + 1);
+
+            chargeHistograms.push_back(
+                ChargeHistogram{metadata, std::move(histogram)});
+        }
+
+        // Fill from the already processed EventAna objects only.
+        for (const EventAna& eventAna : fEvents) {
+            for (std::size_t i = 0; i < selectedChannels.size(); ++i) {
+                const int adc = selectedChannels[i].first;
+                const int ch  = selectedChannels[i].second;
+
+                // A selected channel can be invalid in an individual event.
+                if (!eventAna.Meta().IsValid(adc, ch)) {
+                    continue;
+                }
+
+                const MetaWaveformAna& waveformAna =
+                    eventAna.GetWaveformAna(adc, ch);
+
+                // Other MetaWaveformAna implementations do not expose
+                // individual hits. Leave their selected-channel histogram
+                // empty rather than failing.
+                const WaveAna* waveAna =
+                    dynamic_cast<const WaveAna*>(&waveformAna);
+
+                if (waveAna == nullptr) {
+                    continue;
+                }
+
+                // Fill exactly once per individual Hit::charge.
+                for (const Hit& hit : waveAna->Hits()) {
+                    chargeHistograms[i].histogram->Fill(hit.charge);
+                }
+            }
+        }
+
+        // HistCollection takes an independent final clone of each completed
+        // histogram and assigns its canonical HistName ROOT object name.
+        HistCollection collection;
+
+        for (const ChargeHistogram& item : chargeHistograms) {
+            collection.Add(item.metadata, *item.histogram);
+        }
+
+        collection.Dump(filename,"UPDATE");
+
+        std::cout << "Analysis::DumpChargeHistograms: wrote "
+                  << collection.Size()
+                  << " charge histogram(s) to '"
+                  << filename
+                  << "'\n";
+    }        
 private:
     Run& fRun;
     WaveformAnaFactory fFactory;

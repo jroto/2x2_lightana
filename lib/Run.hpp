@@ -188,6 +188,11 @@ public:
     /// Read-only access to the current channel map.
     const ChannelMap& GetChannelMap() const { return fChannelMap; }
 
+    /// Run number supplied at construction time.
+    /// Returns -1 when the Run was constructed from an explicit file list
+    /// (no run number was provided).
+    int RunNumber() const { return fRunNumber; }
+
     /// UTC Unix timestamp of the first event in this run, in whole seconds.
     /// Derived from fStartTimeMs, which is populated in Init() by reading
     /// row 0 of the first subrun file. Use this as the `time` field for
