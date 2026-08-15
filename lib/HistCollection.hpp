@@ -318,6 +318,62 @@ public:
         // Commit.
         *this = std::move(loaded);
     }
+    std::vector<TH1*> GetByChannel(int adc, int ch) const {
+        if (adc < 0 || adc >= static_cast<int>(kNumADCs))
+            throw std::invalid_argument(
+                "HistCollection::GetChannel: adc " + std::to_string(adc) +
+                " out of range [0, " + std::to_string(kNumADCs) + ")");
+        if (ch < 0 || ch >= static_cast<int>(kNumChannels))
+            throw std::invalid_argument(
+                "HistCollection::GetChannel: ch " + std::to_string(ch) +
+                " out of range [0, " + std::to_string(kNumChannels) + ")");
+
+        std::vector<TH1*> result;
+        int nMatched = 0;
+        for (const auto& entry : fEntries) {
+            if (entry.name.ADC() == adc && entry.name.Channel() == ch) {
+                ++nMatched;
+                TH1* h = dynamic_cast<TH1*>(entry.object.get());
+                if (h) result.push_back(h);
+            }
+        }
+
+        if (nMatched > 0 && result.empty())
+            throw std::invalid_argument(
+                "HistCollection::GetChannel: entries found for ADC " +
+                std::to_string(adc) + " CH " + std::to_string(ch) +
+                " but none are TH1-derived (are they TGraph objects?)");
+
+        return result;
+    }
+    std::vector<TH1*> GetByChannelRun(int adc, int ch, int run) const {
+        if (adc < 0 || adc >= static_cast<int>(kNumADCs))
+            throw std::invalid_argument(
+                "HistCollection::GetChannel: adc " + std::to_string(adc) +
+                " out of range [0, " + std::to_string(kNumADCs) + ")");
+        if (ch < 0 || ch >= static_cast<int>(kNumChannels))
+            throw std::invalid_argument(
+                "HistCollection::GetChannel: ch " + std::to_string(ch) +
+                " out of range [0, " + std::to_string(kNumChannels) + ")");
+
+        std::vector<TH1*> result;
+        int nMatched = 0;
+        for (const auto& entry : fEntries) {
+            if (entry.name.ADC() == adc && entry.name.Channel() == ch && entry.name.Run() == run) {
+                ++nMatched;
+                TH1* h = dynamic_cast<TH1*>(entry.object.get());
+                if (h) result.push_back(h);
+            }
+        }
+
+        if (nMatched > 0 && result.empty())
+            throw std::invalid_argument(
+                "HistCollection::GetChannel: entries found for ADC " +
+                std::to_string(adc) + " CH " + std::to_string(ch) +
+                " but none are TH1-derived (are they TGraph objects?)");
+
+        return result;
+    }
 
 private:
     std::vector<HistEntry> fEntries;

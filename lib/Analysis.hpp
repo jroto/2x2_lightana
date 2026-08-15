@@ -708,7 +708,7 @@ public:
             collection.Add(item.metadata, *item.histogram);
         }
 
-        collection.Dump(filename,"UPDATE");
+        collection.Dump(filename,"RECREATE");
 
         std::cout << "Analysis::DumpChargeHistograms: wrote "
                   << collection.Size()

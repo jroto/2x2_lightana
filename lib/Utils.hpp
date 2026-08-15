@@ -66,4 +66,29 @@ inline bool PauseExecution(
     }
 }
 
+// Good palette for overlaid histograms in ROOT
+// Visually distinct, colorblind-friendly, works on white and dark backgrounds
+const std::vector<int> MyColors = {
+    kBlue+1,       // deep blue
+    kRed+1,        // clean red
+    kGreen+2,      // dark green
+    kOrange+7,     // burnt orange
+    kMagenta+1,    // magenta
+    kCyan+2,       // teal
+    kViolet+5,     // purple
+    kYellow+2,     // olive/dark yellow
+    kPink+6,       // salmon
+    kAzure+7,      // sky blue
+    kSpring+4,     // lime green
+    kTeal+3,       // dark teal
+    kOrange+3,     // warm amber
+    kBlue-4,       // light blue
+    kRed-4,        // light red / rose
+    kGreen-3,      // sage green
+    kViolet-1,     // lavender
+    kPink-3,       // light pink
+    kOrange-3,     // peach
+    kAzure+3       // cornflower blue
+};
+
 } // namespace ndlar_light
