@@ -174,8 +174,8 @@ public:
     /// Reload the channel map from a CSV file.
     /// Takes effect from the next call to Reset() + process().
     void SetChannelMap(const std::string& csvPath) {
-        fChannelMap = ChannelMap::LoadFromCSV(csvPath);
         fChannelMapPath = csvPath;
+        fChannelMap.LoadFromCSV(fChannelMapPath);
     }
     void ResetChannels(bool active = false) {
         fChannelMap.ResetAll(active);
@@ -183,6 +183,9 @@ public:
     /// Programmatically activate or deactivate a single channel.
     void SelectChannel(int adc, int ch, bool active) {
         fChannelMap.SetActive(adc, ch, active);
+    }
+    void SetChannelMap(const ChannelMap& map) {
+        fChannelMap = map;
     }
 
     /// Read-only access to the current channel map.
@@ -300,7 +303,7 @@ private:
     void LoadDefaultChannelMap()
     {
         try {
-            fChannelMap = ChannelMap::LoadFromCSV(kDefaultChannelMapPath);
+            fChannelMap.LoadFromCSV(kDefaultChannelMapPath);
             fChannelMapPath = kDefaultChannelMapPath;
         } catch (...) {
             fChannelMap = ChannelMap(); // all channels active
@@ -403,7 +406,7 @@ private:
     std::vector<std::string> fSubrunFiles;
     int fRunNumber = -1;
     ChannelMap fChannelMap;
-    std::string fChannelMapPath = "(none - all channels active)";
+    std::string fChannelMapPath = kDefaultChannelMapPath;//"(none - all channels active)";
 
     size_t fTotalEvents = 0;
     std::vector<size_t> fSubrunStart; // prefix sums, size = NumSubruns() + 1

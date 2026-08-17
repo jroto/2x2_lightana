@@ -27,15 +27,16 @@ public:
                 fChannels[a][c].channel = c;
                 fChannels[a][c].active  = true;
             }
+
+//            LoadFromCSV(kDefaultChannelMapPath);
     }
 
     /// Load from CSV. Expected header (order must match):
     ///   adc,channel,tpc,x,y,z,trap_type,active
     /// `active` is 1 (active) or 0 (inactive).
     /// Throws std::runtime_error on file or parse errors.
-    static ChannelMap LoadFromCSV(const std::string& path) {
+    void LoadFromCSV(const std::string& path) {
         std::cout << "Loading channel map from '" << path << "'...";
-        ChannelMap cm;
         std::ifstream f(path);
         if (!f.is_open())
             throw std::runtime_error(
@@ -59,11 +60,11 @@ public:
                 ch.channel < 0 || ch.channel >= kNumChannels)
                 throw std::runtime_error(
                     "ChannelMap::LoadFromCSV: out-of-range entry");
-            cm.fChannels[ch.adc][ch.channel] = ch;
+            fChannels[ch.adc][ch.channel] = ch;
         }
         std::cout << "Done. Loaded channel map with " << kNumADCs << " ADCs and "
                   << kNumChannels << " channels per ADC." << std::endl;
-        return cm;
+        Print();
     }
 
     bool IsActive(int adc, int ch) const {
@@ -83,9 +84,38 @@ public:
             for (int c = 0; c < kNumChannels; ++c)
                 fChannels[a][c].active = active;
     } 
+        // --- Collect active channels from the ChannelMap ---
+
+    void UpdateSelectedChannels() // (adc, ch)
+    {
+        std::vector<std::pair<int, int>> activeChannels;
+        for (int adc = 0; adc < kNumADCs; ++adc)
+            for (int ch = 0; ch < kNumChannels; ++ch)
+                if (IsActive(adc, ch))
+                    activeChannels.emplace_back(adc, ch);
+        if (activeChannels.empty()) {
+            std::cout << "Analysis::Loop: no active channels in ChannelMap. "
+                    << "Use Run::SelectChannel() to activate channels.\n";
+            return;
+        }
+        fSelectedChannels=activeChannels;
+    }
+    std::vector<std::pair<int, int>> &GetSelectedChannels() {
+        UpdateSelectedChannels();
+        return fSelectedChannels; 
+    }
+    void Print()
+    {
+        std::cout << "ChannelMap: " << kNumADCs << " ADCs, " << kNumChannels << " channels per ADC\n";
+        std::cout << "Active channels: " << GetSelectedChannels().size() << "\n";
+
+    }
+
 
 private:
     Channel fChannels[kNumADCs][kNumChannels];
+    std::vector<std::pair<int, int>> fSelectedChannels;
+
 };
 
 } // namespace ndlar_light

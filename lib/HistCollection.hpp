@@ -63,6 +63,8 @@
 #include <utility>
 #include <vector>
 
+using namespace std;
+
 namespace ndlar_light {
 
 /// One entry in the collection: structured metadata + owned ROOT object.
@@ -237,7 +239,7 @@ public:
     /// Throws std::runtime_error  if the file cannot be created.
     /// Throws std::logic_error    if the central name/metadata invariant is
     ///                            violated (should never happen in normal use).
-    void Dump(const std::string& filename, string option="RECREATE") const
+    void Dump(const std::string& filename, std::string option="RECREATE") const
     {
         TFile file(filename.c_str(), option.c_str());
         if (file.IsZombie()) {
@@ -262,6 +264,8 @@ public:
 
         file.Write();
         file.Close();
+        std::cout << "HistCollection::Dump: wrote " << fEntries.size()
+                  << " object(s) to \"" << filename << "\"\n";
     }
 
     /// Replace this collection with all valid supported objects from a ROOT
@@ -317,6 +321,8 @@ public:
 
         // Commit.
         *this = std::move(loaded);
+        std::cout << "HistCollection::Load: loaded " << fEntries.size()
+                  << " supported object(s) from \"" << filename << "\"\n";
     }
     std::vector<TH1*> GetByChannel(int adc, int ch) const {
         if (adc < 0 || adc >= static_cast<int>(kNumADCs))
@@ -371,8 +377,19 @@ public:
                 "HistCollection::GetChannel: entries found for ADC " +
                 std::to_string(adc) + " CH " + std::to_string(ch) +
                 " but none are TH1-derived (are they TGraph objects?)");
+        if(result.size()==0) {
+            std::cerr << "HistCollection::GetByChannelRun: WARNING!!! No TH1 objects found for ADC "
+             << adc << ", CH " << ch << ", Run " << run << ". You are probably about to get a segfault.\n";
+        }
 
         return result;
+    }
+    void Print() const {
+        std::cout << "HistCollection: " << fEntries.size() << " entries\n";
+        for (const auto& entry : fEntries) {
+            std::cout << "  Name: " << entry.name.ToString()
+                      << ", Class: " << entry.object->ClassName() << "\n";
+        }
     }
 
 private:

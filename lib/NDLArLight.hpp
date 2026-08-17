@@ -23,3 +23,5 @@
 #include "WaveAna.hpp"
 #include "EventAna.hpp"
 #include "Analysis.hpp"
+#include "GainCalibrator.hpp"
+#include "VBRCalibrator.hpp"

@@ -1,0 +1,6 @@
+g++ -g -std=c++17 \
+  -I$(spack location -i highfive)/include \
+  -I$(spack location -i hdf5)/include \
+  -o mytest macros/test.cpp \
+  -L$(spack location -i hdf5)/lib -lhdf5 \
+  $(root-config --cflags --libs)

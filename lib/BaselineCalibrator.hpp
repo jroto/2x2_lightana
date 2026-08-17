@@ -17,6 +17,7 @@
 #include "Utils.hpp"
 
 #include "TF1.h"
+#include "TFitResult.h"
 #include "TFitResultPtr.h"
 #include "TH1F.h"
 #include "TCanvas.h"
@@ -33,6 +34,8 @@
 #include <string>
 #include <vector>
 #include <utility>
+
+using namespace std;
 
 namespace ndlar_light {
 
@@ -332,6 +335,105 @@ private:
                     << (fitResult.Get() != nullptr)
                     << "\n";
         }
+
+    }
+    /// Write a one-page PDF report with eight vertically stacked plots:
+    /// one baseline-versus-channel histogram for each ADC.
+    ///
+    /// Each TH1F has 64 bins, corresponding to channels 0--63.
+    /// Non-selected channels remain empty. Bin contents are result.mean and
+    /// bin errors are result.sigma.
+    void PrintReport(
+        const std::string& pdfFile = "baseline_report.pdf"
+    ) const
+    {
+        if (fSelectedChannels.empty()) {
+            std::cerr << "BaselineCalibrator::PrintReport: "
+                    << "no channels were selected in the most recent calibration.\n";
+            return;
+        }
+
+        // Must remain alive until canvas.Print(), because the canvas draws them.
+        std::array<TH1F, kNumADCs> histograms;
+
+        TCanvas canvas(
+            "baseline_report_canvas",
+            "Baseline calibration report",
+            1400, 2200
+        );
+
+        canvas.Divide(1, kNumADCs, 0.0, 0.0);
+
+        for (int adc = 0; adc < kNumADCs; ++adc) {
+            TH1F& hist = histograms[adc];
+
+            const std::string histName =
+                "h_baseline_vs_channel_adc_" + std::to_string(adc);
+
+            hist.SetName(histName.c_str());
+            hist.SetTitle(
+                Form("Baseline versus channel: ADC %d;Channel;Baseline (ADC counts)",
+                    adc)
+            );
+
+            // One bin per integer channel: channel 0 -> bin 1, ..., channel 63 -> bin 64.
+            hist.SetBins(kNumChannels, -0.5, kNumChannels - 0.5);
+            hist.SetStats(false);
+
+            hist.SetMarkerStyle(20);
+            hist.SetMarkerSize(0.65);
+            hist.SetMarkerColor(kBlue + 1);
+            hist.SetLineColor(kBlue + 1);
+            hist.SetLineWidth(2);
+
+            // Fill only selected channels belonging to this ADC.
+            for (const auto& channel : fSelectedChannels) {
+                const int selectedAdc = channel.first;
+                const int ch          = channel.second;
+
+                if (selectedAdc != adc) continue;
+
+                const ChannelBaseline& result = fResult[adc][ch];
+
+                // Leave this selected bin empty if calibration found no windows.
+                if (result.n_windows == 0) continue;
+
+                const int bin = hist.FindBin(ch);
+
+                hist.SetBinContent(bin, result.mean);
+                hist.SetBinError(bin, result.sigma);
+            }
+
+            canvas.cd(adc + 1);
+
+            gPad->SetGridx();
+            gPad->SetGridy();
+            gPad->SetLeftMargin(0.11);
+            gPad->SetRightMargin(0.04);
+            gPad->SetTopMargin(0.12);
+            gPad->SetBottomMargin(0.18);
+
+            // "E1" draws vertical error bars; "P" draws a marker at every
+            // non-empty selected-channel bin.
+            hist.Draw("E1 P");
+
+            hist.GetXaxis()->SetNdivisions(kNumChannels / 4);
+            hist.GetXaxis()->SetTitleSize(0.07);
+            hist.GetXaxis()->SetLabelSize(0.055);
+
+            hist.GetYaxis()->SetTitleSize(0.07);
+            hist.GetYaxis()->SetLabelSize(0.055);
+            hist.GetYaxis()->SetTitleOffset(0.60);
+        }
+
+        canvas.Modified();
+        canvas.Update();
+
+        // A normal .pdf filename writes one PDF page.
+        canvas.Print(pdfFile.c_str());
+
+        std::cout << "Baseline calibration report written to: "
+                << pdfFile << "\n";
     }
 };
 
