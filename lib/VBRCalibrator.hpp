@@ -73,14 +73,6 @@ namespace ndlar_light {
         void PerformGainFits() {
             for (auto& gain_calibrator : fGainCalibrators) {
                 gain_calibrator.fRun->SetChannelMap(fChannelMap);
-            cout << "HI1" << endl;
-                fChannelMap.Print();
-            cout << "HI2" << endl;
-                cout << gain_calibrator.fRun->GetSelectedChannels().size() << endl;
-            cout << "HI3" << endl;
-                gain_calibrator.fRun->Print();
-            cout << "HI4" << endl;
-                PauseExecution();
                 gain_calibrator.PerformGainFits();
             }
             GainFitsAvailable=true;
@@ -145,7 +137,8 @@ namespace ndlar_light {
                 tgVBR = new TGraphErrors();
                 for (auto &gainfit : GainsVector) {
                     if (!gainfit.fitSuccesfull) {
-                        std::cerr << "Gain fit not successful for ADC " << adc << ", channel " << channel << "\n";
+                        std::cout << "Gain fit not successful for ADC " << adc << ", channel " << channel << ", voltage " << gainfit.fVoltage << "V.\n";
+                        continue;
                     }
                     tgVBR->SetPoint(i, gainfit.fVoltage, gainfit.fGain);
                     tgVBR->SetPointError(i, 0, gainfit.fGainError);
@@ -174,9 +167,9 @@ namespace ndlar_light {
                     dVdp1 * dVdp1 * FitRes->CovMatrix(1, 1) +
                     2.0 * dVdp0 * dVdp1 * FitRes->CovMatrix(0, 1)
                 );
-                cout << p0 << " " << p1 << endl;
-                cout << vbr << " " << vbr_error << endl;
-                cout << FitRes->CovMatrix(0, 0) << " " << FitRes->CovMatrix(1, 1) << " " << FitRes->CovMatrix(0, 1) << endl;
+//                cout << p0 << " " << p1 << endl;
+//                cout << vbr << " " << vbr_error << endl;
+//                cout << FitRes->CovMatrix(0, 0) << " " << FitRes->CovMatrix(1, 1) << " " << FitRes->CovMatrix(0, 1) << endl;
             }
 
 
@@ -210,8 +203,9 @@ namespace ndlar_light {
                 std::vector<GainCalibrator::GainFit> gains;
                 std::vector<float> voltages;
                 for (auto& gain_calibrator : fGainCalibrators) { //per run
-                    gain_calibrator.fRun->SetChannelMap(fChannelMap);
+//                    gain_calibrator.fRun->SetChannelMap(fChannelMap);
                     GainCalibrator::GainFit &fit = gain_calibrator.GetGainFitPerChannel(adc, ch);
+
                     gains.push_back(fit);
                     voltages.push_back(gain_calibrator.fVoltage);
                 }
@@ -271,7 +265,6 @@ namespace ndlar_light {
                     voltages.push_back(gain_calibrator.fVoltage);
                 }
                 Results result(adc, ch, gains);
-                file->ls();
                 TF1* fFromFile= dynamic_cast<TF1*>(file->Get(Form("fVBR_ADC%d_CH%d", result.adc, result.channel)));
                 TGraphErrors* tgFromFile = dynamic_cast<TGraphErrors*>(file->Get(Form("tgVBR_ADC%d_CH%d", result.adc, result.channel)));
                 TFitResult* fitresFromFile = dynamic_cast<TFitResult*>(file->Get(Form("fitres_ADC%d_CH%d", result.adc, result.channel)));
@@ -386,8 +379,8 @@ namespace ndlar_light {
                 );
                 vbrBox->Draw();
                 c->Modified();c->Update();
-                cout << "VBRCalibrator::PrintReport: Printing page " << j << " of " << fVBRResults.size() << "\n";
-                PauseExecution();
+                cout << "VBRCalibrator::PrintReport: Printing page " << j+1 << " of " << fVBRResults.size() << "\n";
+//                PauseExecution();
                 if(fVBRResults.size()==1) c->Print("Report.pdf", "pdf");
                 else if(j==0) c->Print("Report.pdf(", "pdf");
                 else if (j==fVBRResults.size()-1) c->Print("Report.pdf)", "pdf");

@@ -326,6 +326,7 @@ private:
         }
         fSubrunStart.push_back(running_total);
         fTotalEvents = running_total;
+        std::cout << fSubrunStart.size() << " subruns found." << std::endl;
 
         // Cache first-event metadata (start time, serial numbers)
         {
