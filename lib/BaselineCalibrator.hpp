@@ -343,6 +343,7 @@ private:
     /// Each TH1F has 64 bins, corresponding to channels 0--63.
     /// Non-selected channels remain empty. Bin contents are result.mean and
     /// bin errors are result.sigma.
+    public:
     void PrintReport(
         const std::string& pdfFile = "baseline_report.pdf"
     ) const

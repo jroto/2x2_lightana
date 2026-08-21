@@ -258,8 +258,8 @@ public:
                     "stored object name \"" + storedName
                     + "\" != HistName \"" + expected + "\"");
             }
-
-            file.WriteObject(entry.object.get(), expected.c_str());
+            entry.object->Write(expected.c_str(), TObject::kOverwrite);
+//            file.WriteObject(entry.object.get(), expected.c_str(), TObject::kOverwrite);
         }
 
         file.Write();

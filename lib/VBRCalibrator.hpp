@@ -16,6 +16,10 @@ namespace ndlar_light {
     class VBRCalibrator
     {
         public:
+        struct VBRFitParameters {
+            double minVoltage;
+            double maxVoltagre;
+        };
         struct RunElement {
             int run_number;
             float voltage;
@@ -63,11 +67,11 @@ namespace ndlar_light {
                 fGainCalibrators.push_back(gain_calibrator);
             }
         }
-        void ProcessSPEHist() {
+        void ProcessSPEHist(string dumpmode="RECREATE") {
             for (auto& gain_calibrator : fGainCalibrators) {
                 gain_calibrator.fRun->SetChannelMap(fChannelMap);
                 //reset channel map in case it a selection was applied.
-                gain_calibrator.ProcessSPEHist();
+                gain_calibrator.ProcessSPEHist(dumpmode);
             }
         }
         void PerformGainFits() {
@@ -85,6 +89,16 @@ namespace ndlar_light {
         void SelectChannel(int adc, int channel) {
             std::cout << "VBRCalibrator: Selecting ADC " << adc << ", channel " << channel << "\n";
             fChannelMap.SetActive(adc, channel, true);
+        }
+        void SelectADC(int adc) {
+            std::cout << "VBRCalibrator: Selecting ADC " << adc << ", deselecting other ADCs.\n";
+            for(int adcIndex = 0; adcIndex <kNumADCs; ++adcIndex) {
+                if(adcIndex != adc) {
+                    for(int ch = 0; ch < kNumChannels; ++ch) {
+                        fChannelMap.SetActive(adcIndex, ch, false);
+                    }
+                }
+            }
         }
         std::vector<std::pair<int, int>> GetSelectedChannels() {
             fChannelMap.UpdateSelectedChannels();
@@ -119,6 +133,7 @@ namespace ndlar_light {
         to calibrate a single channel. Each VBR use as an input a set of gain histograms, then results will include
         a vector of GainFit, one for each point in the gain vs voltage curve*/
         class Results{
+            static constexpr int kNoFitResult = -9999;
             public:
             int adc;
             int channel;
@@ -127,16 +142,24 @@ namespace ndlar_light {
             double vbr_error;
             TGraphErrors *tgVBR=NULL;
             TF1 *fVBR=NULL;
-            TFitResult *FitRes;
+            TFitResultPtr fitres;
+            bool fitPerformed=false; // true if is succesfull
+            bool fitSuccessful=false; // true if is succesfull
+            int fitStatus = -9999;
+
             Results(){}
             Results(int a, int c, std::vector<GainCalibrator::GainFit> gv) : adc(a), channel(c),
             GainsVector(gv) {}
             void Fit()
             {
+                fitPerformed = false;
+                fitSuccessful = false;
+                fitStatus = kNoFitResult;
+
                 int i=0;
                 tgVBR = new TGraphErrors();
                 for (auto &gainfit : GainsVector) {
-                    if (!gainfit.fitSuccesfull) {
+                    if (!gainfit.fitSuccessful) {
                         std::cout << "Gain fit not successful for ADC " << adc << ", channel " << channel << ", voltage " << gainfit.fVoltage << "V.\n";
                         continue;
                     }
@@ -150,8 +173,24 @@ namespace ndlar_light {
                 tgVBR->SetTitle("Gain vs Voltage; Voltage (V); Gain (ADC counts x ticks)");
                 fVBR = new TF1("fVBR","pol1",50,58);
                 fVBR->SetParNames("Inter.","Slope");
-                TFitResultPtr r =tgVBR->Fit(fVBR,"RSE");
-                FitRes = dynamic_cast<TFitResult*>(r->Clone());
+                fitres =tgVBR->Fit(fVBR,"RSE");
+                fitPerformed = true;
+
+                if (!fitres.Get()) {
+                    //h->Draw(); PauseExecution();
+                    std::cout << tgVBR->GetName() << " fit failed." << endl;
+                    return;
+                    //throw runtime_error("GainCalibrator::GainFit::Fit() Fit failed: no valid TFitResult returned");
+                    // handle empty histogram / failed fit
+                }
+                fitStatus=fitres->Status();
+                if (fitStatus != 0 || !fitres->IsValid()) {
+                    std::cout << tgVBR->GetName()
+                            << " fit failed with ROOT status "
+                            << fitStatus << ".\n";
+                    return;
+                }
+                fitSuccessful = true;
                 FillVBRFromFit();
             }
             void FillVBRFromFit()
@@ -163,9 +202,9 @@ namespace ndlar_light {
                 const double dVdp0 = -1.0 / p1;
                 const double dVdp1 =  p0 / (p1 * p1);
                 vbr_error = std::sqrt(
-                    dVdp0 * dVdp0 * FitRes->CovMatrix(0, 0) +
-                    dVdp1 * dVdp1 * FitRes->CovMatrix(1, 1) +
-                    2.0 * dVdp0 * dVdp1 * FitRes->CovMatrix(0, 1)
+                    dVdp0 * dVdp0 * fitres->CovMatrix(0, 0) +
+                    dVdp1 * dVdp1 * fitres->CovMatrix(1, 1) +
+                    2.0 * dVdp0 * dVdp1 * fitres->CovMatrix(0, 1)
                 );
 //                cout << p0 << " " << p1 << endl;
 //                cout << vbr << " " << vbr_error << endl;
@@ -230,19 +269,41 @@ namespace ndlar_light {
                 throw std::runtime_error( "VBRCalibrator::DumpFits: Error opening file "+kVBRFitsFile+" for writing.\n");
             }
             for (auto &result : fVBRResults) {
-                if (result.fVBR) {
-                    cout << 1 << endl;
-                    result.fVBR->Write(Form("fVBR_ADC%d_CH%d", result.adc, result.channel));
+
+/*               const std::string histName = result.tgVBR->GetName();
+                std::cout << "VBRCalibrator::DumpFits: Dumping VBR fit for ADC " << result.adc << ", Channel " << result.channel << "\n";
+                std::cout << tgname << " fitPerformed: " << result.fitPerformed << ", fitSuccessful: " << result.fitSuccessful << ", fitStatus: " << result.fitStatus << "\n";
+                PauseExecution();
+*/              string tgname=Form("ADC%d_CH%d", result.adc, result.channel);
+                TParameter<int> fitPerformed(
+                    Form("fit_performed_%s", tgname.c_str()),
+                    static_cast<int>(result.fitPerformed)
+                );
+
+                TParameter<int> fitSuccessful(
+                    Form("fit_successful_%s", tgname.c_str()),
+                    static_cast<int>(result.fitSuccessful)
+                );
+
+                TParameter<int> fitStatus(
+                    Form("fit_status_%s", tgname.c_str()),
+                    result.fitStatus
+                );
+                fitPerformed.Write();
+                fitSuccessful.Write();
+                fitStatus.Write();
+                if (!result.fitSuccessful) {
+                    continue;
                 }
-                if (result.tgVBR) {
-                    cout << 2 << endl;
-                    result.tgVBR->Write(Form("tgVBR_ADC%d_CH%d", result.adc, result.channel));
+                if (!result.tgVBR || !result.fitres.Get() || !result.fVBR) {
+                    throw std::runtime_error(
+                        "VBRCalibrator::DumpVBRFits: internally inconsistent "
+                        "successful fit for " + tgname + " but missing TGraphErrors, TF1, or TFitResult."
+                    );
                 }
-                if (result.FitRes) {
-                    cout << 3 << endl;
-                    result.FitRes->Write(Form("fitres_ADC%d_CH%d", result.adc, result.channel));
-                }
-                    cout << 4 << endl;
+                result.fVBR->Write(Form("fVBR_ADC%d_CH%d", result.adc, result.channel));
+                result.tgVBR->Write(Form("tgVBR_ADC%d_CH%d", result.adc, result.channel));
+                result.fitres->Write(Form("fitres_ADC%d_CH%d", result.adc, result.channel));
             }
             file->Close();
             std::cout << "VBRCalibrator::DumpFits: Completed dumping VBR fits\n";
@@ -264,29 +325,59 @@ namespace ndlar_light {
                     gains.push_back(fit);
                     voltages.push_back(gain_calibrator.fVoltage);
                 }
-                Results result(adc, ch, gains);
-                TF1* fFromFile= dynamic_cast<TF1*>(file->Get(Form("fVBR_ADC%d_CH%d", result.adc, result.channel)));
-                TGraphErrors* tgFromFile = dynamic_cast<TGraphErrors*>(file->Get(Form("tgVBR_ADC%d_CH%d", result.adc, result.channel)));
-                TFitResult* fitresFromFile = dynamic_cast<TFitResult*>(file->Get(Form("fitres_ADC%d_CH%d", result.adc, result.channel)));
-                if (fitresFromFile != nullptr) {
-                    result.FitRes = dynamic_cast<TFitResult*>(fitresFromFile->Clone());
+                string tgname=Form("ADC%d_CH%d", adc, ch);
+                auto* fitPerformedFromFile = dynamic_cast<TParameter<int>*>(
+                    file->Get(Form("fit_performed_%s", tgname.c_str())));
+
+                auto* fitSuccessfulFromFile = dynamic_cast<TParameter<int>*>(
+                    file->Get(Form("fit_successful_%s", tgname.c_str())));
+
+                auto* fitStatusFromFile = dynamic_cast<TParameter<int>*>(
+                    file->Get(Form("fit_status_%s", tgname.c_str())));
+                if (fitPerformedFromFile == nullptr ||
+                    fitSuccessfulFromFile == nullptr ||
+                    fitStatusFromFile == nullptr) {
+                    throw std::runtime_error(
+                        "GainCalibrator::LoadGainFits: missing fit-state metadata for " +
+                        tgname
+                    );
                 }
+                Results result(adc, ch, gains);
+                result.fitPerformed =
+                    static_cast<bool>(fitPerformedFromFile->GetVal());
+                result.fitSuccessful =
+                    static_cast<bool>(fitSuccessfulFromFile->GetVal());
+                result.fitStatus = fitStatusFromFile->GetVal();
+                TGraphErrors* tgFromFile = dynamic_cast<TGraphErrors*>(file->Get(Form("tgVBR_%s", tgname.c_str())));
+                if(tgFromFile!= nullptr) {
+                    result.tgVBR = dynamic_cast<TGraphErrors*>(tgFromFile->Clone());
+                }
+                if(!result.fitSuccessful)
+                {
+                    std::cout << "VBRCalibrator::LoadVBRFits: Warning, fit not successful for ADC " << result.adc << ", Channel " << result.channel << ". Skipping fit result load.\n";
+                    continue;
+                }
+
+                TF1* fFromFile= dynamic_cast<TF1*>(file->Get(Form("fVBR_ADC%d_CH%d", result.adc, result.channel)));
+                TFitResult* fitresFromFile = dynamic_cast<TFitResult*>(file->Get(Form("fitres_ADC%d_CH%d", result.adc, result.channel)));
                 if(fFromFile!= nullptr) {
 
                     result.fVBR = dynamic_cast<TF1*>(fFromFile->Clone());
                 }
-                if(tgFromFile!= nullptr) {
-                    result.tgVBR = dynamic_cast<TGraphErrors*>(tgFromFile->Clone());
+                if (fitresFromFile != nullptr) {
+                    result.fitres = dynamic_cast<TFitResult*>(fitresFromFile->Clone());
                 }
 
-                if (result.fVBR && result.tgVBR && result.FitRes) {
+                if (fitresFromFile==nullptr || fFromFile==nullptr) {
+                    std::cout << result.adc << " " << result.channel << " " << tgname << "\n";
+                    std::cout << result.fitPerformed << " " << result.fitSuccessful << " " << result.fitStatus << "\n";
+                    cout << result.fVBR << " " << result.tgVBR << " " << result.fitres << "\n";
+                    throw std::runtime_error(Form("VBRCalibrator::LoadVBRFits: Error loading VBR fit for ADC %d, Channel %d", result.adc, result.channel));
+                }
+                else{
                     result.FillVBRFromFit();
                     cout << "******VBRCalibrator::LoadVBRFits: Loaded VBR for ADC " << result.adc << ", Channel " << result.channel
                          << ": VBR = " << result.vbr << " ± " << result.vbr_error << "\n";
-                }
-                else{
-                    cout << result.fVBR << " " << result.tgVBR << " " << result.FitRes << "\n";
-                    throw std::runtime_error(Form("VBRCalibrator::LoadVBRFits: Error loading VBR fit for ADC %d, Channel %d", result.adc, result.channel));
                 }
                 fVBRResults.push_back(result);
             }
@@ -374,9 +465,13 @@ namespace ndlar_light {
                 vbrBox->SetTextFont(42);
                 vbrBox->SetTextSize(0.05);
 
-                vbrBox->AddText(
-                    Form("V_{BR} = %.3f #pm %.3f V", result.vbr, result.vbr_error)
-                );
+                if(result.fitSuccessful) {
+                    vbrBox->AddText(
+                    Form("V_{BR} = %.3f #pm %.3f V", result.vbr, result.vbr_error));
+                }
+                else {
+                    vbrBox->AddText("V_{BR} fit failed");
+                }
                 vbrBox->Draw();
                 c->Modified();c->Update();
                 cout << "VBRCalibrator::PrintReport: Printing page " << j+1 << " of " << fVBRResults.size() << "\n";

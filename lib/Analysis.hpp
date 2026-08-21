@@ -77,34 +77,54 @@ public:
     {
         fEvents.clear();
         fRun.Reset();
+
         int counter = 0;
 
         while (fRun.HasNext()) {
-            if (counter>maxEvents && maxEvents > 0) {
+            if (maxEvents >= 0 && counter >= maxEvents) {
                 break;
             }
+
             const Event& event = fRun.NextEvent();
 
-            EventAna ana;
-            ana.Meta() = event.Meta();
-            if(counter % 1000 == 0) {
-                std::cout << "Processing event " << event.Meta().GetId() << " (event number " << event.Meta().GetEventNumber()
-                << ") out of " << fRun.TotalEvents()<< std::endl;
+            if (counter % 1000 == 0) {
+                std::cout << "Processing event "
+                        << event.Meta().GetId()
+                        << " (event number "
+                        << event.Meta().GetEventNumber()
+                        << ") out of "
+                        << fRun.TotalEvents()
+                        << "\n";
             }
 
-            for (int adc = 0; adc < kNumADCs; ++adc) {
-                for (int ch = 0; ch < kNumChannels; ++ch) {
-                    bool valid = event.IsValid(adc, ch);
-                    auto ptr = fFactory(event.GetWaveform(adc, ch), valid);
-                    ana.SetWaveformAna(adc, ch, std::move(ptr));
-                }
-            }
-
-            fEvents.push_back(std::move(ana));
-            counter++;
+            fEvents.push_back(AnalyzeEvent(event));
+            ++counter;
         }
     }
+    EventAna AnalyzeEvent(const Event& event)
+    {
+        EventAna ana;
+        ana.Meta() = event.Meta();
 
+        for (int adc = 0; adc < kNumADCs; ++adc) {
+            for (int ch = 0; ch < kNumChannels; ++ch) {
+                const bool valid = event.IsValid(adc, ch);
+
+                auto ptr = fFactory(
+                    event.GetWaveform(adc, ch),
+                    valid
+                );
+
+                ana.SetWaveformAna(adc, ch, std::move(ptr));
+            }
+        }
+
+        return ana;
+    }
+    EventAna AnalyzeEventByIndex(std::size_t globalIndex)
+    {
+        return AnalyzeEvent(fRun.GetEvent(globalIndex));
+    }
     /// Results accumulated by the most recent process() call.
     const std::vector<EventAna>& GetEvents() const { return fEvents; }
 
@@ -594,7 +614,7 @@ public:
         }
     }
 
-private:
+//private:
     Run& fRun;
     WaveformAnaFactory fFactory;
     std::vector<EventAna> fEvents;

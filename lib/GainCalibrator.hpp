@@ -20,23 +20,21 @@ namespace ndlar_light {
     {
         public:
 
-        static double MultiGaus(double *x, double *par) {
-            double val = 0;
-            int NGaus = 5; // or pass this in some other way if variable
-            for (int i = 0; i < NGaus; i++) {
-                double A     = par[3*i];
-                double mu    = par[3*i+1];
-                double sigma = par[3*i+2];
-                val += A * TMath::Exp(-0.5*TMath::Sq((x[0]-mu)/sigma));
-            }
-            return val;
-        }
         /*This class will hold a single Gain fit for a given channel.
         It will contain the fit results and the fit itself and some
         drawing/debugging functions */
+
+        struct GainFitParameters {
+            double min;
+            double max;
+            int ngaus;
+            double gain;
+            double sigma;
+        };
         static constexpr int kNoFitResult = -9999;
         class GainFit {
             public:
+            GainFitParameters EstPars;
             std::string parnames[18];
             float fGain=1300;
             float fSigma=270;
@@ -48,17 +46,26 @@ namespace ndlar_light {
             TGraphErrors *tg=NULL;
             TGraphErrors *th=NULL;
             bool fitPerformed=false; // true if is succesfull
-            bool fitSuccesfull=false; // true if is succesfull
+            bool fitSuccessful=false; // true if is succesfull
+            int fitStatus = -9999;
             double fGainError=0;
             double fSigmaError=0;
             TH1 *h=NULL;
             TFitResultPtr fitres;
             double fVoltage=0;
-
-            int fitStatus = -9999;
+            double MultiGaus(double *x, double *par) {
+                double val = 0;
+                for (int i = 0; i < EstPars.ngaus; i++) {
+                    double A     = par[3*i];
+                    double mu    = par[3*i+1];
+                    double sigma = par[3*i+2];
+                    val += A * TMath::Exp(-0.5*TMath::Sq((x[0]-mu)/sigma));
+                }
+                return val;
+            }
             static double GainEstimator(double voltage, int adc)
             {
-                if(adc==0) return 157*voltage-8232;
+                if(adc==0||adc==1) return 157*voltage-8232;
                 else return 637*voltage-33119;
             }
 
@@ -66,29 +73,34 @@ namespace ndlar_light {
             {
                 return 30.5*voltage-1476;
             }
-            GainFit(double voltage, TH1* hh) {
+            GainFit(double voltage, TH1* hh, GainFitParameters *params) {
                 h=hh;
 //                cout << "GainFit constructor called with voltage " << voltage << endl;
                 fVoltage=voltage;
                 int adc=HistName::Parse(h->GetName()).ADC();
-                if (adc==0) NGaus=4;
-                else NGaus=5;
-                fGain=GainEstimator(voltage,adc);
-                fSigma=SigmaEstimator(voltage,adc);
-                for(int j=1;j<NGaus; j++) func += "+gaus("+to_string(j*3)+")";
-                double min=fGain*0.6;
-                double max=fGain*(NGaus+1)+0.4*fSigma;
-//                cout << fVoltage << " " << fGain << " " << fSigma << endl;
-//                cout << min << " " << max << endl;
-                f1 = new TF1(Form("f1"),GainCalibrator::MultiGaus,min,max, NGaus*3);
-//                f1 = new TF1(Form("f1"),func.c_str(),fGain*0.6,fGain*(NGaus+1)+0.4*fSigma, NGaus*3);
+                if(params) {
+                    EstPars = *params;
+                }
+                else { //default estimation of parameters if not provided
+                    if (adc==0 || adc==1) EstPars.ngaus=4;
+                    else EstPars.ngaus=5;
+                    EstPars.gain=GainEstimator(voltage,adc);
+                    EstPars.sigma=SigmaEstimator(voltage,adc);
+                    EstPars.min = 0.6*EstPars.gain;
+                    EstPars.max = EstPars.gain*(EstPars.ngaus+1)+0.4*EstPars.sigma;
+                }
+
+                for(int j=1;j<EstPars.ngaus; j++) func += "+gaus("+to_string(j*3)+")";
+
+                f1 = new TF1(Form("f1"),&GainCalibrator::GainFit::MultiGaus,EstPars.min,EstPars.max, EstPars.ngaus*3);
+
                 double par[18];
  //               PauseExecution();
-                for(int j=0;j<NGaus; j++)
+                for(int j=0;j<EstPars.ngaus; j++)
                 {
-                    par[j*3]=600*(NGaus-j);
-                    par[j*3+1]= fGain*(j+1);
-                    par[j*3+2]=fSigma;
+                    par[j*3]=600*(EstPars.ngaus-j);
+                    par[j*3+1]= EstPars.gain*(j+1);
+                    par[j*3+2]=EstPars.sigma;
                     parnames[j*3]="Constant_{"+std::to_string(j)+"}";
                     parnames[j*3+1]="#mu_{"+std::to_string(j)+"}";
                     parnames[j*3+2]="#sigma_{"+std::to_string(j)+"}";
@@ -96,8 +108,9 @@ namespace ndlar_light {
                     f1->SetParameter(j*3+1,par[j*3+1]);
                     f1->SetParameter(j*3+2,par[j*3+2]);
                 }
-                for(int j=0;j<NGaus; j++) f1->SetParLimits(j*3+1, fGain*(j+1)-fSigma,fGain*(j+1)+fSigma);
-                for(int j=0;j<NGaus; j++) f1->SetParLimits(j*3+2, 0.3*fSigma, 3*fSigma);
+                for(int j=0;j<EstPars.ngaus; j++) f1->SetParLimits(j*3+1, EstPars.gain*(j+1)-EstPars.sigma,EstPars.gain*(j+1)+EstPars.sigma);
+                for(int j=0;j<EstPars.ngaus; j++) f1->SetParLimits(j*3+2, 0.3*EstPars.sigma, 3*EstPars.sigma);
+
 //                for(int j=0;j<NGaus; j++) std::cout << "par["<<j*3<<"]="<<par[j*3]<<", par["<<j*3+1<<"]="<<par[j*3+1]<<", par["<<j*3+2<<"]="<<par[j*3+2]<<"\n";
             }
             void Fit()
@@ -111,7 +124,7 @@ namespace ndlar_light {
                 ROOT::Math::MinimizerOptions::SetDefaultMaxIterations(10000);
 //                h=hh;
                 fitPerformed = false;
-                fitSuccesfull = false;
+                fitSuccessful = false;
                 fitStatus = kNoFitResult;
 
                 if (h == nullptr) {
@@ -119,21 +132,24 @@ namespace ndlar_light {
                 }
                 gStyle->SetOptStat(1);
                 gStyle->SetOptFit(1);
+                h->Fit(f1,"RSQEN");
 //                h->Draw();
 //                h->Fit(f1,"ERS");
 //                h->Print();
 //                gPad->SetLogy();
-                h->Fit(f1,"RSQEN");
+//                h->Fit(f1,"RSQEN");
 //                PauseExecution();
         //        h->Fit(f,"ERS");
         //        ndlar_light::PauseExecution();
-                fGain= f1->GetParameters()[1];
-                fSigma=f1->GetParameters()[2];
-                f2 = new TF1(Form("f2_%s",h->GetName()),GainCalibrator::MultiGaus,f1->GetParameters()[1]*0.6,fGain*(NGaus+1)+0.4*fSigma,NGaus*3);
+                EstPars.gain = f1->GetParameters()[1];
+                EstPars.sigma = f1->GetParameters()[2];
+                EstPars.min = fGain*0.6;
+                EstPars.max = fGain*(EstPars.ngaus+1)+0.4*fSigma;
+                f2 = new TF1(Form("f2_%s",h->GetName()),&(GainCalibrator::GainFit::MultiGaus()),EstPars.min,EstPars.max,EstPars.ngaus*3);
                 f2->SetName(Form("f2_%s",h->GetName()));
                 f2->SetParameters(f1->GetParameters());
             //        for(int j=0;j<NGaus; j++) f2->SetParLimits(j*3+1, gain*(j+1)-sigma,gain*(j+1)+sigma);
-                for(int k=0;k<3*NGaus; k++) f2->SetParName(k, parnames[k].c_str());
+                for(int k=0;k<3*EstPars.ngaus; k++) f2->SetParName(k, parnames[k].c_str());
                 fitres=h->Fit(f2,"ERSNQ");
                 fitPerformed = true;
 
@@ -152,7 +168,7 @@ namespace ndlar_light {
                             << fitStatus << ".\n";
                     return;
                 }
-                fitSuccesfull = true;
+                fitSuccessful = true;
 
                 fSigma=f2->GetParameters()[2];
                 fSigmaError=f2->GetParErrors()[2];
@@ -165,13 +181,13 @@ namespace ndlar_light {
 
                 tg->SetName(Form("tg_%s",h->GetName()));
                 tg->SetTitle(Form("Gain vs NPE Run %d ADC %i ch %i; NPE; Hit charge (ADC counts x ticks)",run_number, adc, ch));
-                for(int j=0; j<NGaus; j++)
+                for(int j=0; j<EstPars.ngaus; j++)
                 {
                     tg->SetPoint(tg->GetN(),1+j,f2->GetParameters()[j*3+1]);
                     tg->SetPointError(tg->GetN()-1,0,f2->GetParErrors()[j*3+1]);
                 }
                 tg->Draw("AP");
-                f3 = new TF1(Form("f3_%s",h->GetName()),"pol1",0,NGaus+1);
+                f3 = new TF1(Form("f3_%s",h->GetName()),"pol1",0,EstPars.ngaus+1);
                 f3->SetParNames("Intercept","Gain");
                 gStyle->SetOptFit(0);
                 tg->Fit(f3,"RSENQ");
@@ -189,7 +205,7 @@ namespace ndlar_light {
             }
             void Print()
             {
-                std::cout << "GainFit status: fitPerformed=" << fitPerformed << ", fitSuccesfull=" << fitSuccesfull << ", fitStatus=" << fitStatus << "\n";
+                std::cout << "GainFit status: fitPerformed=" << fitPerformed << ", fitSuccessful=" << fitSuccessful << ", fitStatus=" << fitStatus << "\n";
             }
             void Draw(TVirtualPad *pad) {
                 pad->cd();
@@ -197,7 +213,7 @@ namespace ndlar_light {
                 h->GetXaxis()->SetRangeUser(-fGain,2.5*(fGain*(NGaus+1)+0.4*fSigma));
                 h->Draw("hist");
                 Print();
-                if (!fitPerformed || fitStatus==kNoFitResult || !fitSuccesfull) return;
+                if (!fitPerformed || fitStatus==kNoFitResult || !fitSuccessful) return;
                 f2->Draw("same");
                 pad->Modified(); pad->Update();
 
@@ -274,13 +290,54 @@ namespace ndlar_light {
         std::string kGainHistFile;
         bool Status=false; //True if the fGainFits are available.
 
-        
+        std::string kGainFitParametersFile;
+        std::map<std::pair<int,int>, GainFitParameters> fGainFitParameters; // key: (adc, ch), value: GainFitParameters
+
+        void LoadGainFitParameters()
+        {
+            fGainFitParameters.clear();
+            std::ifstream infile(kGainFitParametersFile);
+            if (!infile.is_open()) {
+                std::cout << "GainCalibrator::LoadGainFitParameters: No GainFitParameters, we will work with the hardcode estimation." << kGainFitParametersFile << "\n";
+                return;
+            }
+            std::string line;
+            while (std::getline(infile, line)) {
+                std::istringstream iss(line);
+                int adc, ch, ngaus;
+                double min, max, gain, sigma;
+                if (!(iss >> adc >> ch >> min >> max >> ngaus >> gain >> sigma)) {
+                    std::cerr << "GainCalibrator::LoadGainFitParameters: Warning, could not parse line: " << line << "\n";
+                    continue;
+                }
+                fGainFitParameters.emplace(std::make_pair(adc, ch), GainFitParameters{min, max, ngaus, gain, sigma});
+            }
+            infile.close();
+        }
+        void DumpGainFitParameters()
+        {
+            std::ofstream outfile(kGainFitParametersFile);
+            if (!outfile.is_open()) {
+                std::cerr << "GainCalibrator::DumpGainFitParameters: Error, could not open file for writing: " << kGainFitParametersFile << "\n";
+                return;
+            }
+            for (const auto& entry : fGainFitParameters) {
+                int adc = entry.first.first;
+                int ch = entry.first.second;
+                const GainFitParameters& pars = entry.second;
+                outfile << adc << " " << ch << " " << pars.min << " " << pars.max << " "
+                        << pars.ngaus << " " << pars.gain << " " << pars.sigma << "\n";
+            }
+            outfile.close();
+        }  
         GainCalibrator(Run* r, double v) : fRun(r), fVoltage (v) {
             std::cout << "GainCalibrator on run "<< fRun->RunNumber()<<"\n";
             fSelectedChannels = fRun->GetSelectedChannels();
 //            fRun->Print();
             kGainFitsFile= Form("GainFits_%i.root",fRun->RunNumber());
             kGainHistFile= Form("GainHist_%i.root",fRun->RunNumber());
+            kGainFitParametersFile = Form("GainFitParameters_%i.csv",fRun->RunNumber());
+            LoadGainFitParameters();
 
 
             //Run hitfinder, create the SPE histograms and dump them to a file for
@@ -305,7 +362,7 @@ namespace ndlar_light {
                           << ", Gain: " << gainfit.fGain 
                           << ", Gain Error: " << gainfit.fGainError 
                           << ", Fit Performed: " << gainfit.fitPerformed 
-                          << ", Fit Successful: " << gainfit.fitSuccesfull 
+                          << ", Fit Successful: " << gainfit.fitSuccessful 
                           << "\n";
             }
         }
@@ -345,6 +402,7 @@ namespace ndlar_light {
             {
                 const int adc = channel.first;
                 const int ch  = channel.second;
+                
 //                cout << "GainCalibrator::PerformGainFits: Processing ADC " << adc << ", Channel " << ch << "\n";
                 if(!fRun) {
                     std::cerr << "GainCalibrator::PerformGainFits: Error, Run not set\n";
@@ -357,9 +415,19 @@ namespace ndlar_light {
                 }
                 ndlar_light::HistName hn = ndlar_light::HistName::Parse(h->GetName());
                 h->SetTitle(Form("Run %d - adc %i - ch %i",hn.Run(), hn.ADC(), hn.Channel() ));
-                GainFit gainfit(fVoltage,h);
+                GainFitParameters *pars = nullptr;
+                auto it = fGainFitParameters.find(std::make_pair(adc, ch));
+                if (it != fGainFitParameters.end()) {
+                    pars = &(it->second);
+                }
+                GainFit gainfit(fVoltage,h,pars);
                 gainfit.Fit();
                 fGainFits.push_back(gainfit);
+                if(!pars) {
+                    // Save the estimated parameters for future runs
+                    GainFitParameters newPars = gainfit.EstPars;
+                    fGainFitParameters.emplace(std::make_pair(adc, ch), newPars);
+                }
             }  
             DumpGainFits();
             Status=true;
@@ -390,7 +458,7 @@ namespace ndlar_light {
 
                 TParameter<int> fitSuccessful(
                     Form("fit_successful_%s", histName.c_str()),
-                    static_cast<int>(g.fitSuccesfull)
+                    static_cast<int>(g.fitSuccessful)
                 );
 
                 TParameter<int> fitStatus(
@@ -401,7 +469,7 @@ namespace ndlar_light {
                 fitSuccessful.Write();
                 fitStatus.Write();
                 // A failed fit deliberately has no TFitResult object.
-                if (!g.fitSuccesfull) {
+                if (!g.fitSuccessful) {
                     continue;
                 }
                 // These must exist for a successful fit.
@@ -420,6 +488,7 @@ namespace ndlar_light {
             f->Close();
             collection.Dump(kGainFitsFile,"UPDATE");
             std::cout << "GainCalibrator::DumpGainFits completed, gain fits saved to " << kGainFitsFile << "\n";
+            DumpGainFitParameters();
         }
         void LoadGainFits()
         {
@@ -466,16 +535,16 @@ namespace ndlar_light {
                         histName
                     );
                 }
-                GainFit gainfit(fVoltage,h);
+                GainFit gainfit(fVoltage,h,nullptr);
                 gainfit.h = dynamic_cast<TH1*>(h->Clone());
                 gainfit.h->SetDirectory(nullptr);
                 gainfit.fitPerformed =
                     static_cast<bool>(fitPerformedFromFile->GetVal());
-                gainfit.fitSuccesfull =
+                gainfit.fitSuccessful =
                     static_cast<bool>(fitSuccessfulFromFile->GetVal());
                 gainfit.fitStatus = fitStatusFromFile->GetVal();
 
-                if (!gainfit.fitSuccesfull) {
+                if (!gainfit.fitSuccessful) {
                     // This is a valid persisted analysis outcome, not a corrupt file.
                     std::cout << "GainCalibrator::LoadGainFits: ADC "
                             << adc << ", CH " << ch
@@ -523,17 +592,11 @@ namespace ndlar_light {
             Status=true;
             std::cout << "GainCalibrator::LoadGainFits completed, " << fGainFits.size() << " gain fits loaded\n";
         }
-        void ProcessSPEHist()
+        void ProcessSPEHist(string dumpmode="RECREATE")
         {
             try {
                 std::cout << "GainCalibrator::ProcessSPEHist start for run " << fRun->RunNumber() << "\n";
-                // --- 1. Build run and select channels (unchanged) ---
-        //        fRun->ResetChannels(false);
-        //        fRun->SelectChannel(2, 4, true);
-        //        fRun->SelectChannel(2, 5, true);
 
-                // --- 2. Baseline calibration (NEW) ---
-                // Configure the baseline estimator and calibrator
                 CalibratorConfig cal_cfg;
                 cal_cfg.baseline_cfg.window_ticks      = 30;    // ticks per baseline window
                 cal_cfg.baseline_cfg.amp_threshold_adc = 120.0;   // max Amp = max-min in window
@@ -546,6 +609,7 @@ namespace ndlar_light {
                 BaselineCalibrator calibrator(cal_cfg);
                 calibrator.Calibrate(*fRun);   // reads up to 1000 events, fits Gaussians per channel
                 calibrator.Print();          // print calibrated baseline table
+                calibrator.PrintReport(Form("BaselineReport_Run%d.txt", fRun->RunNumber()));
         //        calibrator.Draw();
 
                 // --- 3. WaveAna configuration (NEW) ---
@@ -575,8 +639,9 @@ namespace ndlar_light {
                 //               accumulated across all events displayed so far.
         //        analysis.Loop2();
                 std::cout << "GainCalibrator::ProcessSPEHist::analysis::process\n";
-                analysis.process();
-                DumpChargeHistograms(analysis,kGainHistFile,"VBR");
+//                analysis.process();
+//                DumpChargeHistograms(analysis,kGainHistFile,"VBR");
+                LowMemDumpProcess(analysis,kGainHistFile,"VBR",dumpmode);
 
                 // Alternatively, use the single-row waveform viewer:
                 // analysis.Loop();
@@ -588,6 +653,129 @@ namespace ndlar_light {
                 std::cerr << "GainCalibrator::ProcessSPEHist error: " << e.what() << std::endl;
             }
         }
+        void  LowMemDumpProcess(Analysis& analysis,
+            const std::string& filename,
+            const std::string& tag, string dumpmode="RECREATE") const
+        {
+
+            // Take one stable snapshot. Each selected channel gets exactly one
+            // output histogram, including channels for which no hit is found.
+            const std::vector<std::pair<int, int>> selectedChannels =
+                fRun->GetSelectedChannels();
+
+            if (selectedChannels.empty()) {
+                throw std::logic_error(
+                    "Analysis::DumpChargeHistograms: no channels are selected");
+            }
+
+            int    kChargeHistBins = 600;
+
+            struct ChargeHistogram {
+                HistName metadata;
+                std::unique_ptr<TH1F> histogram;
+            };
+
+            std::vector<ChargeHistogram> chargeHistograms;
+            chargeHistograms.reserve(selectedChannels.size());
+
+            // Create every selected-channel histogram before examining events.
+            for (const auto& channel : selectedChannels) {
+                const int adc = channel.first;
+                const int ch  = channel.second;
+                double kChargeHistMin  = -1*GainFit::GainEstimator(fVoltage,adc);
+                double kChargeHistMax  = 10*GainFit::GainEstimator(fVoltage,adc);
+
+                const HistName metadata(
+                    adc,
+                    ch,
+                    fRun->RunNumber(),
+                    fRun->StartTimeUnixSeconds(),
+                    "charge",
+                    tag);
+
+                // This temporary ROOT name is irrelevant: HistCollection::Add()
+                // replaces it with metadata.ToString() when storing the clone.
+                const std::string temporaryName =
+                    "tmp_charge_adc" + std::to_string(adc) +
+                    "_ch" + std::to_string(ch);
+
+                const std::string title =
+                    "ADC " + std::to_string(adc) +
+                    " / CH " + std::to_string(ch) +
+                    " individual hit charge;"
+                    "Hit charge (ADC counts #times ticks);Hits";
+
+                std::unique_ptr<TH1F> histogram(new TH1F(
+                    temporaryName.c_str(),
+                    title.c_str(),
+                    kChargeHistBins,
+                    kChargeHistMin,
+                    kChargeHistMax));
+
+                // The temporary histogram is owned here, not by gDirectory.
+                histogram->SetDirectory(nullptr);
+                histogram->SetLineColor(kBlue + 1);
+
+                chargeHistograms.push_back(
+                    ChargeHistogram{metadata, std::move(histogram)});
+            }
+
+            int maxEvents=-1; int counter=0;
+            int adc, ch;
+            while (analysis.fRun.HasNext()) {
+                if (maxEvents >= 0 && counter >= maxEvents) {
+                    break;
+                }
+                if(counter % 1000 == 0) {
+                    std::cout << "Processing event " << counter << " out of "  << analysis.fRun.TotalEvents() << " events\n";
+                }
+                counter++;
+                EventAna eventAna = analysis.AnalyzeEvent(analysis.fRun.NextEvent());
+                
+                for (std::size_t i = 0; i < selectedChannels.size(); ++i) {
+                    adc = selectedChannels[i].first;
+                    ch  = selectedChannels[i].second;
+
+                    // A selected channel can be invalid in an individual event.
+                    if (!eventAna.Meta().IsValid(adc, ch)) {
+                        continue;
+                    }
+
+                    const MetaWaveformAna& waveformAna =
+                        eventAna.GetWaveformAna(adc, ch);
+
+                    // Other MetaWaveformAna implementations do not expose
+                    // individual hits. Leave their selected-channel histogram
+                    // empty rather than failing.
+                    const WaveAna* waveAna =
+                        dynamic_cast<const WaveAna*>(&waveformAna);
+
+                    if (waveAna == nullptr) {
+                        continue;
+                    }
+
+                    // Fill exactly once per individual Hit::charge.
+                    for (const Hit& hit : waveAna->Hits()) {
+                        chargeHistograms[i].histogram->Fill(hit.charge);
+                    }
+                }
+            }
+
+            // HistCollection takes an independent final clone of each completed
+            // histogram and assigns its canonical HistName ROOT object name.
+            HistCollection collection;
+
+            for (const ChargeHistogram& item : chargeHistograms) {
+                collection.Add(item.metadata, *item.histogram);
+            }
+            collection.Dump(filename,dumpmode.c_str());
+            std::cout << "Analysis::DumpChargeHistograms: wrote "
+                    << collection.Size()
+                    << " charge histogram(s) to '"
+                    << filename
+                    << "'\n";
+        }
+
 
         void DumpChargeHistograms(Analysis& analysis,
             const std::string& filename,
