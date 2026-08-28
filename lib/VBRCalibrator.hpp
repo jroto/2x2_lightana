@@ -74,10 +74,10 @@ namespace ndlar_light {
                 gain_calibrator.ProcessSPEHist(dumpmode);
             }
         }
-        void PerformGainFits() {
+        void PerformGainFits(string dumpmode="RECREATE") {
             for (auto& gain_calibrator : fGainCalibrators) {
                 gain_calibrator.fRun->SetChannelMap(fChannelMap);
-                gain_calibrator.PerformGainFits();
+                gain_calibrator.PerformGainFits(dumpmode);
             }
             GainFitsAvailable=true;
         }
@@ -355,6 +355,7 @@ namespace ndlar_light {
                 if(!result.fitSuccessful)
                 {
                     std::cout << "VBRCalibrator::LoadVBRFits: Warning, fit not successful for ADC " << result.adc << ", Channel " << result.channel << ". Skipping fit result load.\n";
+                    fVBRResults.push_back(result);
                     continue;
                 }
 
@@ -413,14 +414,16 @@ namespace ndlar_light {
                 return;
             }
             std::cout << "VBRCalibrator::PrintReport: VBR results, pages: " << fVBRResults.size() << " \n";
-
+std::cout << 1<< endl;
             int j=0;
             for (auto &result : fVBRResults) { //one result per channel
                 TCanvas *c = new TCanvas("Gain","Gain",800,600);
                 c->DivideSquare(result.GainsVector.size()+1); //one entry per gain fit
                 int i = 0;
+std::cout << 2<< endl;
                 for (auto &gainfit : result.GainsVector)
                 {
+std::cout << 3<< " " << i <<  endl;
                     c->cd(i+1);
                     auto h = gainfit.h;
                     h->SetLineColor(ndlar_light::MyColors[0]);
@@ -428,18 +431,20 @@ namespace ndlar_light {
                     ndlar_light::HistName hn = ndlar_light::HistName::Parse(h->GetName());
                     h->SetTitle(Form("Run %d - adc %i - ch %i - %.1fV",hn.Run(), hn.ADC(), hn.Channel(), gainfit.fVoltage ));
                     gainfit.Draw(c->cd(i+1));
+                    cout << "out" << endl;
                     i++;
                 }
                 c->cd(result.GainsVector.size()+1);
-                result.tgVBR->SetMarkerStyle(7);
-                result.tgVBR->SetMarkerColor(ndlar_light::MyColors[1]);
-                result.tgVBR->SetTitle(Form("Gain vs Voltage for ADC %d, Channel %d", result.adc, result.channel));
-
-                gStyle->SetOptStat(0);    // no mostrar estadísticas generales
-                gStyle->SetOptFit(111);   // chi2/ndf + valores de parámetros + errores    tgVBR->Draw("APE02");
-                result.tgVBR->SetMarkerStyle(7);
-                result.tgVBR->Draw("APE02");
+                if(result.fitSuccessful) {
+                    result.tgVBR->SetMarkerStyle(7);
+                    result.tgVBR->SetMarkerColor(ndlar_light::MyColors[1]);
+                    result.tgVBR->SetTitle(Form("Gain vs Voltage for ADC %d, Channel %d", result.adc, result.channel));
+                    gStyle->SetOptStat(0);    // no mostrar estadísticas generales
+                    gStyle->SetOptFit(111);   // chi2/ndf + valores de parámetros + errores    tgVBR->Draw("APE02");
+                    result.tgVBR->SetMarkerStyle(7);
+                    result.tgVBR->Draw("APE02");
                 c->Modified();c->Update();
+                }
 
                 auto* fitBox = dynamic_cast<TPaveStats*>(gPad->GetPrimitive("stats"));
                 if (fitBox) {
@@ -476,11 +481,15 @@ namespace ndlar_light {
                 c->Modified();c->Update();
                 cout << "VBRCalibrator::PrintReport: Printing page " << j+1 << " of " << fVBRResults.size() << "\n";
 //                PauseExecution();
+                cout << "Done1" << endl;
                 if(fVBRResults.size()==1) c->Print("Report.pdf", "pdf");
+
                 else if(j==0) c->Print("Report.pdf(", "pdf");
                 else if (j==fVBRResults.size()-1) c->Print("Report.pdf)", "pdf");
                 else c->Print("Report.pdf", "pdf");
                 j++;
+                cout << "Done2" << endl;
+                PauseExecution();
             }
         }
     };

@@ -10,6 +10,7 @@
 #include "TPaveStats.h"
 #include "TParameter.h"
 #include "Math/MinimizerOptions.h"
+#include <algorithm>
 
 using namespace std;
 
@@ -25,6 +26,7 @@ namespace ndlar_light {
         drawing/debugging functions */
 
         struct GainFitParameters {
+            int ExcludeValleys;
             double min;
             double max;
             int ngaus;
@@ -53,10 +55,40 @@ namespace ndlar_light {
             TH1 *h=NULL;
             TFitResultPtr fitres;
             double fVoltage=0;
-            double MultiGaus(double *x, double *par) {
+            bool ExcludeValleyss=false;
+            double MultiGaus
+            (double *x, double *par) {
+                if (ExcludeValleyss) {
+                    if (x[0] < par[1]-par[2]) {
+                        TF1::RejectPoint();
+                        return 0;
+                    }
+                    for(int i = 0; i < EstPars.ngaus-1; i++)
+                    {
+                        if (x[0] > par[1+3*i]+par[2+3*i] && x[0] < par[1+3*(i+1)]-par[2+3*(i+1)]) {
+                            TF1::RejectPoint();
+                            return 0;
+                        }
+                    }
+                    if (x[0] > par[1+3*(EstPars.ngaus-1)]+par[2+3*(EstPars.ngaus-1)]) {
+                        TF1::RejectPoint();
+                            return 0;
+                    }
+                }
                 double val = 0;
                 for (int i = 0; i < EstPars.ngaus; i++) {
                     double A     = par[3*i];
+                    double mu    = par[3*i+1];
+                    double sigma = par[3*i+2];
+                    val += A * TMath::Exp(-0.5*TMath::Sq((x[0]-mu)/sigma));
+                }
+                return val;
+            }
+            double MultiGaus1(double *x, double *par) {
+                double val = 0;
+                for (int i = 0; i < EstPars.ngaus; i++) {
+//                    Number of parameters: 2*NGaus+1
+                    double A     = par[3*i+0];
                     double mu    = par[3*i+1];
                     double sigma = par[3*i+2];
                     val += A * TMath::Exp(-0.5*TMath::Sq((x[0]-mu)/sigma));
@@ -71,50 +103,197 @@ namespace ndlar_light {
 
             double SigmaEstimator(double voltage, int adc)
             {
-                return 30.5*voltage-1476;
+                if(adc==0||adc==1) return 11.*voltage-493;
+                else return 30.5*voltage-1476;
             }
+            double inipars[18];
+            int adc;
+            int channel;
+            int run;
             GainFit(double voltage, TH1* hh, GainFitParameters *params) {
-                h=hh;
+                h=dynamic_cast<TH1*>(hh->Clone());
+
+//                h=hh;//->Clone(Form("%s",hh->GetName()));
 //                cout << "GainFit constructor called with voltage " << voltage << endl;
                 fVoltage=voltage;
-                int adc=HistName::Parse(h->GetName()).ADC();
+                adc=HistName::Parse(h->GetName()).ADC();
+                channel=HistName::Parse(h->GetName()).Channel();
+                run=HistName::Parse(h->GetName()).Run();
                 if(params) {
                     EstPars = *params;
                 }
                 else { //default estimation of parameters if not provided
-                    if (adc==0 || adc==1) EstPars.ngaus=4;
-                    else EstPars.ngaus=5;
-                    EstPars.gain=GainEstimator(voltage,adc);
-                    EstPars.sigma=SigmaEstimator(voltage,adc);
-                    EstPars.min = 0.6*EstPars.gain;
-                    EstPars.max = EstPars.gain*(EstPars.ngaus+1)+0.4*EstPars.sigma;
+
+//                    PauseExecution();
+                    if (adc==0 || adc==1)
+                    {
+                        if(fVoltage<56.5) EstPars.ngaus=3;
+                        else EstPars.ngaus=4;
+                        EstPars.ExcludeValleys=false;
+
+                        EstPars.gain=GainEstimator(voltage,adc);;
+                        EstPars.sigma=SigmaEstimator(voltage,adc);
+                        EstPars.min = 0.6*EstPars.gain;
+                        EstPars.max = EstPars.gain*(EstPars.ngaus+1)+EstPars.sigma;
+                    }
+                    else
+                    {
+                        double temp_gain=GainEstimator(voltage,adc);
+                        double temp_sigma=SigmaEstimator(voltage,adc);
+                        double temp_min=temp_gain-3.*temp_sigma;
+                        double temp_max=temp_gain+3.*temp_sigma;
+                        cout << "GainFit constructor: voltage=" << voltage << ", adc=" << adc << ", channel=" << channel << ", run=" << run << "\n";
+                        cout << temp_gain << " " << temp_sigma << " " << temp_min << " " << temp_max << "\n";
+                        h->GetXaxis()->SetRangeUser(temp_min,temp_max);
+                        Double_t maxVal = h->GetMaximum();
+                        Int_t maxBin = h->GetMaximumBin();
+                        temp_gain = h->GetXaxis()->GetBinCenter(maxBin);
+                        temp_min=temp_gain-1.5*temp_sigma;
+                        temp_max=temp_gain+1.5*temp_sigma;
+                        h->GetXaxis()->SetRangeUser(-temp_gain,15*temp_gain);
+                        TF1 *firstfit = new TF1(Form("firstfit"),"gaus(0)",temp_min,temp_max);
+                        firstfit->SetParameter(1,temp_gain);
+                        firstfit->SetParameter(2,temp_sigma);
+                        h->Fit(firstfit,"LRSENQ");
+
+                        if(fVoltage<56.5) {EstPars.ngaus=4;}
+                        else {EstPars.ngaus=5; }
+                        if(fVoltage>55) EstPars.ExcludeValleys=true;
+                        else EstPars.ExcludeValleys=true;
+
+                        EstPars.gain=firstfit->GetParameter(1);
+                        EstPars.sigma=firstfit->GetParameter(2);
+                        EstPars.min = 0.6*EstPars.gain;
+                        EstPars.max = EstPars.gain*(EstPars.ngaus+1)+0.4*EstPars.sigma;
+                    }
+
                 }
 
                 for(int j=1;j<EstPars.ngaus; j++) func += "+gaus("+to_string(j*3)+")";
+                f1 = new TF1(Form("f1"),this, &GainFit::MultiGaus1,EstPars.min,EstPars.max, EstPars.ngaus*3);
 
-                f1 = new TF1(Form("f1"),&GainCalibrator::GainFit::MultiGaus,EstPars.min,EstPars.max, EstPars.ngaus*3);
-
-                double par[18];
+                double temp_gain=EstPars.gain;
+                double temp_sigma=EstPars.sigma;
+                double temp_min=temp_gain-1.*temp_sigma;
+                double temp_max=temp_gain+1.*temp_sigma;
+                h->GetXaxis()->SetRangeUser(temp_min,temp_max);
+                Double_t maxVal = h->GetMaximum();
+                h->GetXaxis()->SetRange(0,0);
  //               PauseExecution();
                 for(int j=0;j<EstPars.ngaus; j++)
                 {
-                    par[j*3]=600*(EstPars.ngaus-j);
-                    par[j*3+1]= EstPars.gain*(j+1);
-                    par[j*3+2]=EstPars.sigma;
+                    inipars[j*3]=maxVal*(EstPars.ngaus-j)/EstPars.ngaus;
+                    inipars[j*3+1]= EstPars.gain*(j+1);
+                    inipars[j*3+2]=EstPars.sigma*(1+0.4*j);
                     parnames[j*3]="Constant_{"+std::to_string(j)+"}";
                     parnames[j*3+1]="#mu_{"+std::to_string(j)+"}";
                     parnames[j*3+2]="#sigma_{"+std::to_string(j)+"}";
-                    f1->SetParameter(j*3,par[j*3]);
-                    f1->SetParameter(j*3+1,par[j*3+1]);
-                    f1->SetParameter(j*3+2,par[j*3+2]);
+                    f1->SetParameter(j*3,inipars[j*3]);
+                    f1->SetParameter(j*3+1,inipars[j*3+1]);
+                    f1->SetParameter(j*3+2,inipars[j*3+2]);
                 }
-                for(int j=0;j<EstPars.ngaus; j++) f1->SetParLimits(j*3+1, EstPars.gain*(j+1)-EstPars.sigma,EstPars.gain*(j+1)+EstPars.sigma);
-                for(int j=0;j<EstPars.ngaus; j++) f1->SetParLimits(j*3+2, 0.3*EstPars.sigma, 3*EstPars.sigma);
+                for(int j=0;j<EstPars.ngaus; j++) f1->SetParLimits(j*3+0, inipars[j*3]*0.2,inipars[j*3]*20);
+                for(int j=0;j<EstPars.ngaus; j++) f1->SetParLimits(j*3+1,EstPars.gain*(j+0.5),EstPars.gain*(j+1.5));
+                for(int j=0;j<EstPars.ngaus; j++) f1->SetParLimits(j*3+2, 0.5*EstPars.sigma, 3*EstPars.sigma);
+
+                for(int j=0;j<EstPars.ngaus; j++) std::cout << "par["<<j*3<<"]="<<inipars[j*3]<<", par["<<j*3+1<<"]="<<inipars[j*3+1]<<", par["<<j*3+2<<"]="<<inipars[j*3+2]<<"\n";
+                for (int j=0; j<EstPars.ngaus*3;j++)
+                {
+                    double min, max;
+                    f1->GetParLimits(j,min,max);
+                    std::cout << "Parameter " << parnames[j] << " limits: " << min << ", " << max << "\n";
+                }
 
 //                for(int j=0;j<NGaus; j++) std::cout << "par["<<j*3<<"]="<<par[j*3]<<", par["<<j*3+1<<"]="<<par[j*3+1]<<", par["<<j*3+2<<"]="<<par[j*3+2]<<"\n";
             }
+            bool debug=false;
             void Fit()
             {
+                if(EstPars.ExcludeValleys) FitIndependent();
+                else FitSum();
+            }
+            std::vector<TF1*> f_independent_fits;
+            void FitIndependent()
+            {
+                fitPerformed = false;
+                fitSuccessful = false;
+                fitStatus = kNoFitResult;
+
+                if (h == nullptr) {
+                    return;
+                }
+
+                f_independent_fits.clear();
+                for(int i=0; i<EstPars.ngaus; i++)
+                {
+                    std::cout << i << " " <<  EstPars.gain*(i+1) << " " << EstPars.sigma << "\n";
+                    double temp_min=EstPars.gain*(i+1)-4*EstPars.sigma;
+                    double temp_max=EstPars.gain*(i+1)+4*EstPars.sigma;
+                    h->GetXaxis()->SetRangeUser(temp_min,temp_max);
+                    Double_t maxVal = h->GetMaximum();
+                    Int_t maxBin = h->GetMaximumBin();
+                    double temp_gain = h->GetXaxis()->GetBinCenter(maxBin);
+                    temp_min=temp_gain-2*EstPars.sigma;
+                    temp_max=temp_gain+2*EstPars.sigma;
+                    h->GetXaxis()->SetRangeUser(-temp_gain,15*temp_gain);
+
+                    TF1 *fit = new TF1(Form("fittemp_%s_%d",h->GetName(),i),"gaus",temp_min,temp_max);
+                    h->Fit(fit,"LRSE");
+                    
+                    temp_gain=fit->GetParameter(1);
+                    double temp_sigma=fit->GetParameter(2);
+                    temp_min=temp_gain-2*temp_sigma;
+                    temp_max=temp_gain+2*temp_sigma;
+                    fit = new TF1(Form("f_independent_%i_%s",i,h->GetName()),"gaus",temp_min,temp_max);
+                    fit->SetParameter(0,600);
+                    fit->SetParameter(1,EstPars.gain*(i+1));
+                    fit->SetParameter(2,EstPars.sigma);
+                    h->Fit(fit,"LRSE");
+                    f_independent_fits.push_back(fit);
+//                    PauseExecution();
+                }
+                if (debug)
+                {
+                    h->Draw("hist");
+                    for(int i=0; i<EstPars.ngaus; i++)
+                    {
+                        f_independent_fits[i]->SetLineColor(2);
+                        f_independent_fits[i]->Draw("same");
+                    }
+
+                    PauseExecution();
+                }
+
+                gStyle->SetOptStat(1);
+                gStyle->SetOptFit(1);
+                tg = new TGraphErrors();
+                HistName hn = HistName::Parse(h->GetName());
+                int run_number = hn.Run();
+                int adc = hn.ADC();
+                int ch = hn.Channel();
+
+                tg->SetName(Form("tg_%s",h->GetName()));
+                tg->SetTitle(Form("Gain vs NPE Run %d ADC %i ch %i; NPE; Hit charge (ADC counts x ticks)",run_number, adc, ch));
+                for(int j=0; j<EstPars.ngaus; j++)
+                {
+                    tg->SetPoint(tg->GetN(),1+j,f_independent_fits[j]->GetParameters()[1]);
+                    tg->SetPointError(tg->GetN()-1,0,f_independent_fits[j]->GetParErrors()[1]);
+                }
+                tg->Draw("AP");
+                f3 = new TF1(Form("f3_%s",h->GetName()),"pol1",0,EstPars.ngaus+1);
+                f3->SetParNames("Intercept","Gain");
+                gStyle->SetOptFit(0);
+                tg->Fit(f3,"RSENQ");
+                FillVarsFromFit();
+                std::cout << "Gain vs NPE Run " << run_number << ": slope = " << f3->GetParameters()[1] << ", intercept = " << f3->GetParameters()[0] << "\n";
+                std::cout << "Gain = " << fGain << " +/- " << fGainError << "\n";
+                if(debug) PauseExecution();
+                fitPerformed = true;
+                fitSuccessful = true;
+            }
+            void FitSum()
+            {
+/*
                 ROOT::Math::MinimizerOptions::SetDefaultMinimizer(
                     "Minuit2",
                     "Migrad"
@@ -122,6 +301,7 @@ namespace ndlar_light {
 
                 ROOT::Math::MinimizerOptions::SetDefaultMaxFunctionCalls(100000);
                 ROOT::Math::MinimizerOptions::SetDefaultMaxIterations(10000);
+*/
 //                h=hh;
                 fitPerformed = false;
                 fitSuccessful = false;
@@ -132,8 +312,43 @@ namespace ndlar_light {
                 }
                 gStyle->SetOptStat(1);
                 gStyle->SetOptFit(1);
-                h->Fit(f1,"RSQEN");
-//                h->Draw();
+                TFitResultPtr fitres1 = h->Fit(f1,"LRSE");
+                if(debug)PauseExecution();
+//                std::cout << "Initial fit with f1 completed. Status: " << fitres1->Status() << " " << fitres1->IsValid() <<  "\n";
+//                PauseExecution();
+                double mygain=f1->GetParameter(1);
+                double mysigma=TMath::Abs(f1->GetParameter(2));
+                double mymin = 0.6*mygain;
+                double mymax= mygain*(EstPars.ngaus+1)+0.4*mysigma;
+
+                if (fitres1->IsValid() && fitres1->Status() == 0)
+                {
+                    cout << "Initial fit with f1 completed. Status: " << fitres1->Status() << "\n";
+                    f2 = new TF1(Form("f2_%s",h->GetName()),this,&GainFit::MultiGaus,mymin,mymax,EstPars.ngaus*3);
+                    f2->SetParameters(f1->GetParameters());
+                    for(int j=0;j<EstPars.ngaus; j++) f2->SetParLimits(j*3+1, f1->GetParameter(3*j+1)-f1->GetParameter(3*j+2),f1->GetParameter(3*j+1)+f1->GetParameter(3*j+2));
+                    for(int j=0;j<EstPars.ngaus; j++) f2->SetParLimits(j*3+2, 0.3*mysigma, 5*mysigma);
+                }
+                else
+                {
+                    cout << "Initial fit with f1 failed. Status: " << fitres1->Status() << "\n";
+                    f2 = new TF1(Form("f2_%s",h->GetName()),this,&GainFit::MultiGaus,EstPars.min,EstPars.max,EstPars.ngaus*3);
+                    for(int j=0;j<EstPars.ngaus; j++)
+                    {
+                        f2->SetParameter(j*3,inipars[j*3]);
+                        f2->SetParameter(j*3+1,inipars[j*3+1]);
+                        f2->SetParameter(j*3+2,inipars[j*3+2]);
+                    }
+                    for(int j=0;j<EstPars.ngaus; j++) f2->SetParLimits(j*3+1, EstPars.gain*(j+1)-5*EstPars.sigma,EstPars.gain*(j+1)+5*EstPars.sigma);
+                    for(int j=0;j<EstPars.ngaus; j++) f2->SetParLimits(j*3+2, 0.3*EstPars.sigma, 5*EstPars.sigma);
+                }
+                f2->SetName(Form("f2_%s",h->GetName()));
+//                f2->GetParameter()->HasLowerLimit();
+                for(int k=0;k<3*EstPars.ngaus; k++) f2->SetParName(k, parnames[k].c_str());
+                if (fitres1->IsValid() && fitres1->Status() == 0) {
+                    f2->SetParameters(f1->GetParameters());
+                }
+                //                h->Draw();
 //                h->Fit(f1,"ERS");
 //                h->Print();
 //                gPad->SetLogy();
@@ -141,28 +356,36 @@ namespace ndlar_light {
 //                PauseExecution();
         //        h->Fit(f,"ERS");
         //        ndlar_light::PauseExecution();
-                EstPars.gain = f1->GetParameters()[1];
-                EstPars.sigma = f1->GetParameters()[2];
-                EstPars.min = fGain*0.6;
-                EstPars.max = fGain*(EstPars.ngaus+1)+0.4*fSigma;
-                f2 = new TF1(Form("f2_%s",h->GetName()),&(GainCalibrator::GainFit::MultiGaus()),EstPars.min,EstPars.max,EstPars.ngaus*3);
-                f2->SetName(Form("f2_%s",h->GetName()));
-                f2->SetParameters(f1->GetParameters());
+                
             //        for(int j=0;j<NGaus; j++) f2->SetParLimits(j*3+1, gain*(j+1)-sigma,gain*(j+1)+sigma);
-                for(int k=0;k<3*EstPars.ngaus; k++) f2->SetParName(k, parnames[k].c_str());
                 fitres=h->Fit(f2,"ERSNQ");
+                if(debug)fitres=h->Fit(f2,"ERS");
+                if(debug)
+                {
+                    std::cout << "Initial fit with f2 completed. Status: " << fitres->Status() << "\n";
+                    std::cout << "Parameters: ";
+                    for(int k=0;k<3*EstPars.ngaus; k++) std::cout << f2->GetParameter(k) << " ";
+                    double min, max;
+                    f2->GetParLimits(10,min,max);
+                    cout << "Parameter 3 limits: " << min << ", " << max << " vs " << f2->GetParameter(10)<<"\n";
+                    std::cout << "\n";
+                    PauseExecution();
+                }
+//                std::cout << "Initial fit with f1 completed. Status: " << fitres->Status() << "\n";
+//                PauseExecution();
                 fitPerformed = true;
 
                 if (!fitres.Get()) {
                     //h->Draw(); PauseExecution();
                     std::cout << h->GetName() << " fit failed." << endl;
+
                     return;
                     //throw runtime_error("GainCalibrator::GainFit::Fit() Fit failed: no valid TFitResult returned");
                     // handle empty histogram / failed fit
                 }
                 fitStatus=fitres->Status();
 
-                if (fitStatus != 0 || !fitres->IsValid()) {
+                if (!fitres->IsValid() || fitStatus != 0) {
                     std::cout << h->GetName()
                             << " fit failed with ROOT status "
                             << fitStatus << ".\n";
@@ -200,23 +423,43 @@ namespace ndlar_light {
             {
                 fGain=f3->GetParameters()[1];
                 fGainError=f3->GetParErrors()[1];
-                fSigma=f2->GetParameters()[2];
-                fSigmaError=f2->GetParErrors()[2];
+                if(EstPars.ExcludeValleys)
+                {
+                    fSigma=f_independent_fits[0]->GetParameters()[2];
+                    fSigmaError=f_independent_fits[0]->GetParErrors()[2];
+                }
+                else
+                {
+                    fSigma=f2->GetParameters()[2];
+                    fSigmaError=f2->GetParErrors()[2];
+                }
             }
             void Print()
             {
                 std::cout << "GainFit status: fitPerformed=" << fitPerformed << ", fitSuccessful=" << fitSuccessful << ", fitStatus=" << fitStatus << "\n";
             }
-            void Draw(TVirtualPad *pad) {
+            void Draw(TVirtualPad *pad)
+            {
+                if(EstPars.ExcludeValleys) DrawIndependent(pad);
+                else DrawSum(pad);
+            }
+            void DrawIndependent(TVirtualPad *pad)
+            {
+                cout << "Drawing independent fits for " << h->GetName() << "\n";
+                if(pad==NULL)  throw std::runtime_error("GainCalibrator::GainFit::Draw: Error, pad is NULL.");
                 pad->cd();
                 gPad->SetLogy();
                 h->GetXaxis()->SetRangeUser(-fGain,2.5*(fGain*(NGaus+1)+0.4*fSigma));
                 h->Draw("hist");
                 Print();
-                if (!fitPerformed || fitStatus==kNoFitResult || !fitSuccessful) return;
-                f2->Draw("same");
-                pad->Modified(); pad->Update();
+//                if (!fitPerformed || fitStatus==kNoFitResult) return;
 
+                for (auto myf : f_independent_fits) myf->Draw("same");
+                DrawTGFit(pad);
+            }
+            void DrawTGFit(TVirtualPad *pad)
+            {
+                if(pad==NULL)  throw std::runtime_error("GainCalibrator::GainFit::Draw: Error, pad is NULL.");
                 TPaveText* gainBox = new TPaveText(0.58, 0.32, 0.89, 0.50, "NDC");
                 gainBox->SetFillColor(0);       // white
                 gainBox->SetFillStyle(1001);    // opaque, covers the plot behind it
@@ -230,6 +473,7 @@ namespace ndlar_light {
 
                 gainBox->AddText(Form("Gain = %.1f #pm %.1f", gain, gainError));
                 gainBox->Draw();
+                if(pad==NULL)  throw std::runtime_error("GainCalibrator::GainFit::Draw: Error, pad is NULL.");
 
                 pad->Modified();
                 pad->Update();
@@ -244,7 +488,7 @@ namespace ndlar_light {
                 }
 
         //        ndlar_light::PauseExecution();
-                TPad *inset = new TPad("inset", "inset", 0.50, 0.50, 0.95, 0.95);
+                TPad *inset = new TPad(Form("inset_%i_%i_%i",run,adc,channel), "inset", 0.50, 0.50, 0.95, 0.95);
                 inset->SetFillColor(0);       // white background
                 inset->SetBorderMode(0);      // no border style
                 inset->SetBorderSize(1);      // thin border
@@ -258,7 +502,7 @@ namespace ndlar_light {
                 f3->Draw("same");
                 inset->Update();
                 TPaveStats *st2 = new TPaveStats(0.1, 0.65, 0.60, 0.92, "NDC");
-                st2->SetName("stats");
+
                 st2->SetFillColor(0);
                 st2->SetBorderSize(1);
                 st2->SetTextAlign(12);
@@ -279,6 +523,21 @@ namespace ndlar_light {
                 tg->GetListOfFunctions()->Add(st2);
                 st2->Draw();        // Move the fit box to the top-left
                 inset->Modified(); inset->Update();
+            }
+            void DrawSum(TVirtualPad *pad)
+            {
+                if(pad==NULL)  throw std::runtime_error("GainCalibrator::GainFit::Draw: Error, pad is NULL.");
+                pad->cd();
+                gPad->SetLogy();
+                h->GetXaxis()->SetRangeUser(-fGain,2.5*(fGain*(NGaus+1)+0.4*fSigma));
+                h->Draw("hist");
+                Print();
+                if (!fitPerformed || fitStatus==kNoFitResult || !fitSuccessful) return;
+                if(pad==NULL)  throw std::runtime_error("GainCalibrator::GainFit::Draw: Error, pad is NULL.");
+                f2->Draw("same");
+                if(pad==NULL)  throw std::runtime_error("GainCalibrator::GainFit::Draw: Error, pad is NULL.");
+                pad->Modified(); pad->Update();
+                DrawTGFit(pad);
             }   
         }; //end of GainFit class
 
@@ -306,11 +565,12 @@ namespace ndlar_light {
                 std::istringstream iss(line);
                 int adc, ch, ngaus;
                 double min, max, gain, sigma;
-                if (!(iss >> adc >> ch >> min >> max >> ngaus >> gain >> sigma)) {
+                bool ExcludeValleys;
+                if (!(iss >> adc >> ch >> ExcludeValleys >> min >> max >> ngaus >> gain >> sigma)) {
                     std::cerr << "GainCalibrator::LoadGainFitParameters: Warning, could not parse line: " << line << "\n";
                     continue;
                 }
-                fGainFitParameters.emplace(std::make_pair(adc, ch), GainFitParameters{min, max, ngaus, gain, sigma});
+                fGainFitParameters.emplace(std::make_pair(adc, ch), GainFitParameters{ ExcludeValleys, min, max, ngaus, gain, sigma});
             }
             infile.close();
         }
@@ -325,7 +585,7 @@ namespace ndlar_light {
                 int adc = entry.first.first;
                 int ch = entry.first.second;
                 const GainFitParameters& pars = entry.second;
-                outfile << adc << " " << ch << " " << pars.min << " " << pars.max << " "
+                outfile << adc << " " << ch << " " <<pars.ExcludeValleys <<" " << pars.min << " " << pars.max << " "
                         << pars.ngaus << " " << pars.gain << " " << pars.sigma << "\n";
             }
             outfile.close();
@@ -355,8 +615,12 @@ namespace ndlar_light {
 //                std::cout << "ADC: " << channel.first << ", Channel: " << channel.second << "\n";
 //            }
             std::cout << "Gain fits: " << fGainFits.size() <<"\n";
-            for (const auto& gainfit : fGainFits)
+            for (auto& gainfit : fGainFits)
             {
+                gainfit.Print();
+                if(gainfit.h == nullptr) {
+                    std::cerr << "GainCalibrator::Print: Warning, GainFit without histogram\n";
+                }
                 ndlar_light::HistName hn = ndlar_light::HistName::Parse(gainfit.h->GetName());
                 std::cout << "ADC: " << hn.ADC() << ", Channel: " << hn.Channel() 
                           << ", Gain: " << gainfit.fGain 
@@ -384,7 +648,7 @@ namespace ndlar_light {
 //            ProcessSPEHist();
             PerformGainFits();
         }
-        void PerformGainFits()
+        void PerformGainFits(string option="RECREATE")
         {
             std::cout << "GainCalibrator::PerformGainFits start\n";
 
@@ -429,12 +693,12 @@ namespace ndlar_light {
                     fGainFitParameters.emplace(std::make_pair(adc, ch), newPars);
                 }
             }  
-            DumpGainFits();
+            DumpGainFits(option);
             Status=true;
         }
-        void DumpGainFits()
+        void DumpGainFits(string option="RECREATE")
         {
-            TFile *f = new TFile(kGainFitsFile.c_str(),"RECREATE");
+            TFile *f = new TFile(kGainFitsFile.c_str(),option.c_str());
             if (f->IsZombie()) {
                 throw std::runtime_error(
                     "GainCalibrator::DumpGainFits: cannot create " +
@@ -451,6 +715,7 @@ namespace ndlar_light {
                 const std::string histName = g.h->GetName();
                 collection.Add(HistName::Parse(g.h->GetName()) ,*g.h);
                 // Always persist fit outcome, including the no-TFitResult case.
+
                 TParameter<int> fitPerformed(
                     Form("fit_performed_%s", histName.c_str()),
                     static_cast<int>(g.fitPerformed)
@@ -465,28 +730,43 @@ namespace ndlar_light {
                     Form("fit_status_%s", histName.c_str()),
                     g.fitStatus
                 );
-                fitPerformed.Write();
-                fitSuccessful.Write();
-                fitStatus.Write();
+
+                fitPerformed.Write(fitPerformed.GetName(),TObject::kOverwrite);
+                fitSuccessful.Write(fitSuccessful.GetName(),TObject::kOverwrite);
+                fitStatus.Write(fitStatus.GetName(),TObject::kOverwrite);
                 // A failed fit deliberately has no TFitResult object.
-                if (!g.fitSuccessful) {
-                    continue;
+                if(g.EstPars.ExcludeValleys) {
+                    for (auto myf : g.f_independent_fits) {
+                        if (myf == nullptr) {
+                            throw std::runtime_error(
+                                "GainCalibrator::DumpGainFits: internally inconsistent "
+                                "successful independent fit for " + histName
+                            );
+                        }
+                        myf->Write(myf->GetName(),TObject::kOverwrite);
+                    }
                 }
-                // These must exist for a successful fit.
-                if (g.f2 == nullptr || g.f3 == nullptr ||
-                    g.tg == nullptr || !g.fitres.Get()) {
-                    throw std::runtime_error(
-                        "GainCalibrator::DumpGainFits: internally inconsistent "
-                        "successful fit for " + histName
-                    );
+                else
+                {
+                    if (!g.fitSuccessful) {
+                        continue;
+                    }
+                    // These must exist for a successful fit.
+                    if (g.f2 == nullptr || g.f3 == nullptr ||
+                        g.tg == nullptr || !g.fitres.Get()) {
+                        throw std::runtime_error(
+                            "GainCalibrator::DumpGainFits: internally inconsistent "
+                            "successful fit for " + histName
+                        );
+                    }
+                    g.f2->Write(g.f2->GetName(),TObject::kOverwrite);
+                    g.fitres->Write(Form("fitres_%s",g.h->GetName()));
                 }
-                g.f2->Write();
-                g.f3->Write();
-                g.tg->Write();
-                g.fitres->Write(Form("fitres_%s",g.h->GetName()));
+                g.f3->Write(g.f3->GetName(),TObject::kOverwrite);
+                g.tg->Write(g.tg->GetName(),TObject::kOverwrite);
             }
             f->Close();
-            collection.Dump(kGainFitsFile,"UPDATE");
+            collection.Dump(kGainFitsFile,option);
             std::cout << "GainCalibrator::DumpGainFits completed, gain fits saved to " << kGainFitsFile << "\n";
             DumpGainFitParameters();
         }
@@ -519,6 +799,7 @@ namespace ndlar_light {
                 }
                 TH1* h = matches.front();
                 const std::string histName = h->GetName();
+
                 auto* fitPerformedFromFile = dynamic_cast<TParameter<int>*>(
                     file->Get(Form("fit_performed_%s", histName.c_str())));
 
@@ -535,9 +816,10 @@ namespace ndlar_light {
                         histName
                     );
                 }
-                GainFit gainfit(fVoltage,h,nullptr);
+                GainFit gainfit(fVoltage,h,&fGainFitParameters[std::make_pair(adc, ch)]);
                 gainfit.h = dynamic_cast<TH1*>(h->Clone());
                 gainfit.h->SetDirectory(nullptr);
+
                 gainfit.fitPerformed =
                     static_cast<bool>(fitPerformedFromFile->GetVal());
                 gainfit.fitSuccessful =
@@ -554,10 +836,49 @@ namespace ndlar_light {
                     fGainFits.push_back(gainfit);
                     continue;
                 }
-                TF1* f2FromFile = dynamic_cast<TF1*>(
-                    file->Get(Form("f2_%s", histName.c_str()))
-                );
+                if(gainfit.EstPars.ExcludeValleys)
+                {
+                    for(int i=0; i<gainfit.EstPars.ngaus; i++)
+                    {
+                        TF1* fFromFile = dynamic_cast<TF1*>(
+                            file->Get(Form("f_independent_%i_%s", i, histName.c_str()))
+                        );
+                        if (fFromFile == nullptr) {
+                            throw std::runtime_error(
+                                "GainCalibrator::LoadGainFits: missing independent fit "
+                                "for ADC " + std::to_string(adc) +
+                                ", CH " + std::to_string(ch) +
+                                ", NPE " + std::to_string(i)
+                            );
+                        }
+                        gainfit.f_independent_fits.push_back(dynamic_cast<TF1*>(fFromFile->Clone()));
+                    }
 
+                }
+                else
+                {
+                    TF1* f2FromFile = dynamic_cast<TF1*>(
+                        file->Get(Form("f2_%s", histName.c_str()))
+                    );
+
+
+                    TFitResult* fitresFromFile = dynamic_cast<TFitResult*>(
+                        file->Get(Form("fitres_%s", histName.c_str()))
+                    );
+
+                    if (f2FromFile == nullptr || fitresFromFile == nullptr) {
+                        throw std::runtime_error(
+                            "GainCalibrator::LoadGainFits: successful-fit objects missing for " +
+                            histName
+                        );
+                    }
+
+                    gainfit.f2 = dynamic_cast<TF1*>(f2FromFile->Clone());
+
+                    gainfit.fitres = TFitResultPtr(
+                        new TFitResult(*fitresFromFile)
+                    );
+                }
                 TF1* f3FromFile = dynamic_cast<TF1*>(
                     file->Get(Form("f3_%s", histName.c_str()))
                 );
@@ -565,25 +886,14 @@ namespace ndlar_light {
                 TGraphErrors* tgFromFile = dynamic_cast<TGraphErrors*>(
                     file->Get(Form("tg_%s", histName.c_str()))
                 );
-
-                TFitResult* fitresFromFile = dynamic_cast<TFitResult*>(
-                    file->Get(Form("fitres_%s", histName.c_str()))
-                );
-                if (f2FromFile == nullptr || f3FromFile == nullptr ||
-                    tgFromFile == nullptr || fitresFromFile == nullptr) {
+                if (f3FromFile == nullptr || tgFromFile == nullptr) {
                     throw std::runtime_error(
                         "GainCalibrator::LoadGainFits: successful-fit objects missing for " +
                         histName
                     );
                 }
-
-                gainfit.f2 = dynamic_cast<TF1*>(f2FromFile->Clone());
                 gainfit.f3 = dynamic_cast<TF1*>(f3FromFile->Clone());
                 gainfit.tg = dynamic_cast<TGraphErrors*>(tgFromFile->Clone());
-
-                gainfit.fitres = TFitResultPtr(
-                    new TFitResult(*fitresFromFile)
-                );
 
                 gainfit.FillVarsFromFit();
                 fGainFits.push_back(gainfit);
