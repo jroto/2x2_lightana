@@ -76,11 +76,15 @@ public:
         // NOTE: the subrun index (\d+) must stay inside a capture group -
         // ScanDirectory() uses that group to read the subrun index for
         // sorting; without parentheses here it silently matches nothing.
-        std::string patternString =
-            "mpd_run_data_.*_CST_" +  ss.str() +
-            "_p(\\d{5})\\.FLOW\\.hdf5";
+//      This pattern exlucde the tmp files with unknown time
+//        std::string patternString =
+//            "mpd_run_data_.*_CST_" +  ss.str() +
+//            "_p(\\d{5})\\.FLOW\\.hdf5";
 
-        std::regex pattern(patternString);
+        std::string patternString =
+            "mpd_run_data_(?:.*_CST_|unknown_time_)" + ss.str() +
+            "_p(\\d{5})\\.FLOW\\.hdf5(?:\\.tmp)?";
+                std::regex pattern(patternString);
 
         fSubrunFiles = ScanDirectory(directory, pattern);
         if (fSubrunFiles.empty()) {
