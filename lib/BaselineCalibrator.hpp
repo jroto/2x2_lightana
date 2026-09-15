@@ -43,6 +43,8 @@ namespace ndlar_light {
 struct ChannelBaseline {
     double      mean       = 0.0;   // Gaussian mean = calibrated baseline
     double      sigma      = 0.0;   // Gaussian sigma = calibrated noise
+    double      STD       = 0.0;   // Gaussian mean = calibrated baseline
+    double      STD_sigma       = 0.0;   // Gaussian mean = calibrated baseline
     std::size_t n_windows  = 0;     // number of baseline windows accumulated
     bool        calibrated = false; // true if Gaussian fit succeeded
 };
@@ -65,6 +67,8 @@ public:
             for (int ch = 0; ch < kNumChannels; ++ch) {
                 fHist[adc][ch] = nullptr;
                 fFit [adc][ch] = nullptr;
+                fHist_std[adc][ch] = nullptr;
+                fFit_std [adc][ch] = nullptr;
             }
     }
 
@@ -114,13 +118,15 @@ public:
 
                 for (const auto& seg : segs) {
                     fSamples[adc][ch].push_back(seg.mean);
+                    fSamples_std[adc][ch].push_back(seg.std);
                 }
             }
         }
 
         // Fit only the channels selected for this calibration.
         for (const auto& channel : fSelectedChannels) {
-            FitChannel(channel.first, channel.second);
+            FitChannel(channel.first, channel.second,"mean");
+            FitChannel(channel.first, channel.second,"std");
         }
     }
     /// Access the calibrated baseline for a channel.
@@ -139,6 +145,8 @@ public:
            << std::setw(6)  << "CH"
            << std::setw(12) << "mean"
            << std::setw(12) << "sigma"
+           << std::setw(12) << "std"
+           << std::setw(12) << "std_sigma"
            << std::setw(10) << "n_wins"
            << "calibrated\n";
 
@@ -152,12 +160,14 @@ public:
             const int ch  = channel.second;
 
             const ChannelBaseline& b = fResult[adc][ch];
-
+            std::setprecision(1);
             os << std::left
                << std::setw(6)  << adc
-               << std::setw(6)  << ch
+               << std::setw(6)  << ch << std::fixed << std::setprecision(1)
                << std::setw(12) << b.mean
                << std::setw(12) << b.sigma
+               << std::setw(12) << b.STD
+               << std::setw(12) << b.STD_sigma
                << std::setw(10) << b.n_windows
                << b.calibrated
                << "\n";
@@ -165,7 +175,7 @@ public:
     }
     /// Draw calibrated histograms and fits on a TCanvas, one pad per channel.
     /// Pauses for user input via PauseExecution().
-    void Draw()
+    void Draw(string mode="mean")
     {
         // Collect selected channels that have a histogram
         // (the fit itself may have failed).
@@ -185,7 +195,10 @@ public:
         const int nCols = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(nPads))));
         const int nRows = static_cast<int>(std::ceil(static_cast<double>(nPads) / nCols));
 
-        TCanvas* canvas = new TCanvas("cal_canvas", "Baseline Calibration",
+        string title;
+        if(mode=="mean") title = "Baseline Calibration — mean";
+        else title = "Baseline Calibration — std";
+        TCanvas* canvas = new TCanvas("cal_canvas", title.c_str(),
                                       200, 10, 1400, 900);
         canvas->Divide(nCols, nRows);
         gStyle->SetOptStat(0);
@@ -197,14 +210,20 @@ public:
             canvas->cd(padIdx++);
             gPad->Clear();
 
-            TH1F* h = fHist[adc][ch];
-            TF1*  f = fFit [adc][ch];
+            TH1F* h;
+            if(mode=="mean")h = fHist[adc][ch];
+            else h=fHist_std[adc][ch];
+            TF1*  f;
+            if(mode=="mean") f = fFit [adc][ch];
+            else f=fFit_std[adc][ch];
+
             const ChannelBaseline& res = fResult[adc][ch];
 
             // Draw histogram
             h->SetLineColor(kBlue + 1);
             h->SetLineWidth(1);
-            h->GetXaxis()->SetTitle("Baseline mean (ADC)");
+            if(mode=="mean") h->GetXaxis()->SetTitle("Baseline mean (ADC)");
+            else h->GetXaxis()->SetTitle("Baseline std (ADC)");
             h->GetYaxis()->SetTitle("Windows");
             h->Draw("HIST");
 
@@ -244,20 +263,23 @@ public:
 
 private:
     CalibratorConfig fCfg;
-    Baseline         fBaseline;
-    ChannelBaseline  fResult[kNumADCs][kNumChannels];
+    Baseline         fBaseline; //Class that contains the baseline finding algorithm
+    ChannelBaseline  fResult[kNumADCs][kNumChannels]; //class that contains the results (mean, std, etc)
 
     // Snapshot of Run-selected channels used by the latest Calibrate() call.
     std::vector<std::pair<int, int>> fSelectedChannels;
 
     // Raw accumulated baseline means per channel, kept for histogram/fit.
     std::vector<double> fSamples[kNumADCs][kNumChannels];
+    std::vector<double> fSamples_std[kNumADCs][kNumChannels];
 
     /// Retained per-channel histogram and Gaussian fit for Draw().
     /// Indexed [adc][ch]. nullptr if channel was never calibrated
     /// (no baseline samples accumulated).
     TH1F* fHist[kNumADCs][kNumChannels];
     TF1*  fFit [kNumADCs][kNumChannels];
+    TH1F* fHist_std[kNumADCs][kNumChannels];
+    TF1*  fFit_std [kNumADCs][kNumChannels];
 
     /// Delete ROOT objects and reset all state from a prior calibration.
     /// Safe to call when no calibration has been performed yet.
@@ -267,11 +289,17 @@ private:
             for (int ch = 0; ch < kNumChannels; ++ch) {
                 delete fHist[adc][ch];
                 delete fFit[adc][ch];
+                delete fHist_std[adc][ch];
+                delete fFit_std[adc][ch];
 
                 fHist[adc][ch] = nullptr;
                 fFit[adc][ch]  = nullptr;
 
+                fHist_std[adc][ch] = nullptr;
+                fFit_std[adc][ch]  = nullptr;
+
                 fSamples[adc][ch].clear();
+                fSamples_std[adc][ch].clear();
                 fResult[adc][ch] = ChannelBaseline{};
             }
         }
@@ -283,9 +311,11 @@ private:
     /// The Gaussian fit is restricted to [mean - N*rms, mean + N*rms]
     /// where mean/rms are computed from the histogram itself,
     /// and N = cfg.fit_range_sigma. Retains histogram and fit for Draw().
-    void FitChannel(int adc, int ch)
+    void FitChannel(int adc, int ch, string mode="mean")
     {
-        std::vector<double>& samples = fSamples[adc][ch];
+        std::vector<double>& samples=fSamples[adc][ch];
+        if(mode=="std") samples = fSamples_std[adc][ch];
+
         ChannelBaseline& result = fResult[adc][ch];
 
         if (samples.empty()) {
@@ -300,19 +330,26 @@ private:
         double hiEdge = maxVal + 1.0;
         int nBins = std::max(20, static_cast<int>((maxVal - minVal) * 3));
 
-        std::string hname = "h_baseline_calib_" + std::to_string(adc) + "_" + std::to_string(ch);
+        std::string hname;
+        if(mode=="mean")hname = "h_baseline_calib_" + std::to_string(adc) + "_" + std::to_string(ch);
+        else hname = "h_baselineSTD_calib_" + std::to_string(adc) + "_" + std::to_string(ch);
+
         fHist[adc][ch] = new TH1F(hname.c_str(), "", nBins, loEdge, hiEdge);
+
         for (double v : samples) fHist[adc][ch]->Fill(v);
 
         double h_mean = fHist[adc][ch]->GetMean();
-        double h_rms  = fHist[adc][ch]->GetRMS();
+        double h_std  = fHist[adc][ch]->GetStdDev();
 
-        double fit_min = h_mean - fCfg.fit_range_sigma * h_rms;
-        double fit_max = h_mean + fCfg.fit_range_sigma * h_rms;
+        double fit_min = h_mean - fCfg.fit_range_sigma * h_std;
+        double fit_max = h_mean + fCfg.fit_range_sigma * h_std;
 
-        std::string fname = "f_baseline_calib_" + std::to_string(adc) + "_" + std::to_string(ch);
+        std::string fname;
+        if(mode=="mean")fname = "f_baseline_calib_" + std::to_string(adc) + "_" + std::to_string(ch);
+        else fname = "f_baselineSTD_calib_" + std::to_string(adc) + "_" + std::to_string(ch);
+
         fFit[adc][ch] = new TF1(fname.c_str(), "gaus", fit_min, fit_max);
-        fFit[adc][ch]->SetParameters(fHist[adc][ch]->GetMaximum(), h_mean, h_rms);
+        fFit[adc][ch]->SetParameters(fHist[adc][ch]->GetMaximum(), h_mean, h_std);
 
         // "Q0NR": quiet, do not draw, do not store in histogram's list, use range
         TFitResultPtr fitResult = fHist[adc][ch]->Fit(fFit[adc][ch], "NERSQ");
@@ -320,13 +357,29 @@ private:
 
         result.n_windows  = samples.size();
         if (fitResult.Get() && fitResult->IsValid()) {
-            result.mean       = fFit[adc][ch]->GetParameter(1);
-            result.sigma      = fFit[adc][ch]->GetParameter(2);
+            if(mode=="std")
+            {
+                result.STD       = fFit[adc][ch]->GetParameter(1);
+                result.STD_sigma      = fFit[adc][ch]->GetParameter(2);
+            }
+            else
+            {
+                result.mean       = fFit[adc][ch]->GetParameter(1);
+                result.sigma      = fFit[adc][ch]->GetParameter(2);
+            }
             result.calibrated = true;
         } else {
             // Fit failed: store histogram mean as fallback, mark uncalibrated
-            result.mean       = h_mean;
-            result.sigma      = h_rms;
+            if(mode=="std")
+            {
+                result.STD       = h_mean;
+                result.STD_sigma      = h_std;
+            }
+            else
+            {
+                result.mean       = h_mean;
+                result.sigma      = h_std;
+            }
             result.calibrated = false;
             std::cerr << "BaselineCalibrator: Gaussian fit rejected for ADC "
                     << adc << ", CH " << ch
@@ -430,8 +483,7 @@ private:
         canvas.Modified();
         canvas.Update();
 
-        // A normal .pdf filename writes one PDF page.
-        canvas.Print(pdfFile.c_str());
+        canvas.Print(pdfFile.c_str(), "pdf");
 
         std::cout << "Baseline calibration report written to: "
                 << pdfFile << "\n";
