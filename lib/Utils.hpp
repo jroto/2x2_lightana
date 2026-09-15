@@ -57,6 +57,9 @@ inline bool PauseExecution(
             if (!std::getline(std::cin, line)) {
                 return false;
             }
+            if (line.empty()) {
+                return true;
+            }
             if (line[0] == 'q' || line[0] == 'Q') {
                 throw std::runtime_error("PauseExecution: user requested quit");
             }

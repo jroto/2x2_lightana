@@ -177,9 +177,15 @@ public:
     /// Pauses for user input via PauseExecution().
     void Draw(string mode="mean")
     {
-        // Collect selected channels that have a histogram
-        // (the fit itself may have failed).
-        std::vector<std::pair<int,int>> channels;
+
+        const bool drawMean = (mode == "mean");
+        const bool drawStd  = (mode == "std");
+
+        if (!drawMean && !drawStd) {
+            std::cerr << "BaselineCalibrator::Draw: mode must be \"mean\" or \"std\"; got \""
+                    << mode << "\".\n";
+            return;
+        }        std::vector<std::pair<int,int>> channels;
         for (int adc = 0; adc < kNumADCs; ++adc)
             for (int ch = 0; ch < kNumChannels; ++ch)
                 if (fHist[adc][ch] != nullptr)
@@ -195,11 +201,12 @@ public:
         const int nCols = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(nPads))));
         const int nRows = static_cast<int>(std::ceil(static_cast<double>(nPads) / nCols));
 
-        string title;
-        if(mode=="mean") title = "Baseline Calibration — mean";
-        else title = "Baseline Calibration — std";
-        TCanvas* canvas = new TCanvas("cal_canvas", title.c_str(),
-                                      200, 10, 1400, 900);
+
+        const std::string canvasName  = "baseline_calibration_" + mode;
+        const std::string canvasTitle = "Baseline calibration: " + mode;
+        auto* canvas = new TCanvas(
+            canvasName.c_str(), canvasTitle.c_str(), 200, 10, 1400, 900
+        );
         canvas->Divide(nCols, nRows);
         gStyle->SetOptStat(0);
 
@@ -210,12 +217,9 @@ public:
             canvas->cd(padIdx++);
             gPad->Clear();
 
-            TH1F* h;
-            if(mode=="mean")h = fHist[adc][ch];
-            else h=fHist_std[adc][ch];
-            TF1*  f;
-            if(mode=="mean") f = fFit [adc][ch];
-            else f=fFit_std[adc][ch];
+
+            TH1F* h = drawMean ? fHist[adc][ch] : fHist_std[adc][ch];
+            TF1*  f = drawMean ? fFit[adc][ch]  : fFit_std[adc][ch];
 
             const ChannelBaseline& res = fResult[adc][ch];
 
@@ -242,8 +246,10 @@ public:
             pt->AddText(Form("ADC %d / CH %d", adc, ch));
             pt->AddText(Form("N windows: %zu", res.n_windows));
             if (res.calibrated) {
-                pt->AddText(Form("#mu = %.2f ADC", res.mean));
-                pt->AddText(Form("#sigma = %.2f ADC", res.sigma));
+                drawMean ? pt->AddText(Form("#mu = %.2f ADC", res.mean)) :
+                pt->AddText(Form("#mu = %.2f ADC", res.STD));
+                drawMean ? pt->AddText(Form("#sigma = %.2f ADC", res.sigma)) :
+                pt->AddText(Form("#sigma = %.2f ADC", res.STD_sigma));
             } else {
                 pt->AddText("Fit FAILED");
                 pt->AddText(Form("histo mean = %.2f", res.mean));
@@ -259,6 +265,7 @@ public:
 
         // Pause execution
         PauseExecution("Baseline calibration drawn | [Enter] continue   [q] quit: ");
+        canvas->Delete();
     }
 
 private:
