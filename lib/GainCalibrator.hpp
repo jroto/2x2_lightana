@@ -606,6 +606,9 @@ namespace ndlar_light {
             //Gain fits for selected channels
             // 2. PerformGainFits(); -> Output is a file too
         }
+        void SetGainHistFile(const std::string& filename) {
+            kGainHistFile = filename;
+        }
         void Print()
         {
             std::cout << "GainCalibrator for run " << fRun->RunNumber() << ", voltage " << fVoltage << "\n";
@@ -902,30 +905,36 @@ namespace ndlar_light {
             Status=true;
             std::cout << "GainCalibrator::LoadGainFits completed, " << fGainFits.size() << " gain fits loaded\n";
         }
-        void ProcessSPEHist(string dumpmode="RECREATE")
+        void ProcessSPEHist(string dumpmode="RECREATE", CalibratorConfig *cal_cfg_ptr=nullptr)
         {
             try {
                 std::cout << "GainCalibrator::ProcessSPEHist start for run " << fRun->RunNumber() << "\n";
 
                 CalibratorConfig cal_cfg;
-                cal_cfg.baseline_cfg.window_ticks      = 30;    // ticks per baseline window
+                cal_cfg.baseline_cfg.window_ticks      = 100;    // ticks per baseline window
                 cal_cfg.baseline_cfg.amp_threshold_adc = 120.0;   // max Amp = max-min in window
                 cal_cfg.baseline_cfg.asymmetry_factor  = 3.0;   // max AmpBot/AmpTop ratio
                 cal_cfg.max_events                     = 3000;  // events to use for calibration
                 cal_cfg.fit_range_sigma                = 2.0;   // Gaussian fit range: mean ± 2*RMS
 
+                if(cal_cfg_ptr) cal_cfg = *cal_cfg_ptr;
+
                 std::cout << "GainCalibrator::ProcessSPEHist::BaselineCalibrator start\n";
 
                 BaselineCalibrator calibrator(cal_cfg);
                 calibrator.Calibrate(*fRun);   // reads up to 1000 events, fits Gaussians per channel
+                calibrator.Draw("mean");
+//                calibrator.Draw("std");
                 calibrator.Print();          // print calibrated baseline table
-                calibrator.PrintReport(Form("BaselineReport_Run%d.txt", fRun->RunNumber()));
+                PauseExecution();
+                calibrator.PrintReport(Form("BaselineReport_Run%d.pdf", fRun->RunNumber()),true);
         //        calibrator.Draw();
 
                 // --- 3. WaveAna configuration (NEW) ---
                 WaveAnaConfig wana_cfg;
                 wana_cfg.baseline_cfg   = cal_cfg.baseline_cfg; // reuse same baseline settings
-                wana_cfg.threshold_adc  = 80.0;                  // hit threshold above baseline
+                wana_cfg.threshold_adc  = 300.0;                  // hit threshold above baseline
+                wana_cfg.threshold_SNRatio  = 5.0;             //  // times the baseline RMS noise (tunable)
 
                 // --- 4. Build Analysis with a WaveAna factory (NEW) ---
                 // The factory captures wana_cfg and the calibrator by reference.
@@ -963,6 +972,8 @@ namespace ndlar_light {
                 std::cerr << "GainCalibrator::ProcessSPEHist error: " << e.what() << std::endl;
             }
         }
+        int maxEvents=-1;
+        void SetMaxEvents(int maxEvts) { maxEvents=maxEvts; }
         void  LowMemDumpProcess(Analysis& analysis,
             const std::string& filename,
             const std::string& tag, string dumpmode="RECREATE") const
@@ -1030,7 +1041,7 @@ namespace ndlar_light {
                     ChargeHistogram{metadata, std::move(histogram)});
             }
 
-            int maxEvents=-1; int counter=0;
+             int counter=0;
             int adc, ch;
             while (analysis.fRun.HasNext()) {
                 if (maxEvents >= 0 && counter >= maxEvents) {

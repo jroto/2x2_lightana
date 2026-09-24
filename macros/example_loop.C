@@ -18,8 +18,11 @@
 
 void example_loop() {
 
-    std::string path = "/pnfs/dune/scratch/users/jsoto/NDLAr_Run3/VBRscan_20260716/";
-    int run_number = 1130;
+//    std::string path = "/pnfs/dune/scratch/users/jsoto/NDLAr_Run3/VBRscan_20260716/";
+//    std::string path = "/global/cfs/cdirs/dune/www/data/2x2/nearline_run2/flowed_light/source_co60_Vscan/run_46V/";
+    std::string path = "/global/cfs/cdirs/dune/www/data/2x2/nearline_run3/flowed_light/cold_commission/20260904_purity_co60/";
+
+    int run_number = 1275;
 
     try {
         std::cout << "Building run from path: " << path << " run number: " << run_number << "\n";

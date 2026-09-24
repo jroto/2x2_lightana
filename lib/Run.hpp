@@ -191,6 +191,11 @@ public:
     void SetChannelMap(const ChannelMap& map) {
         fChannelMap = map;
     }
+    void DeselectADC(int adc) {
+        for (int ch = 0; ch < kNumChannels; ++ch) {
+            fChannelMap.SetActive(adc, ch, false);
+        }
+    }
 
     /// Read-only access to the current channel map.
     const ChannelMap& GetChannelMap() const { return fChannelMap; }

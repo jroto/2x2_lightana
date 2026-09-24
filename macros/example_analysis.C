@@ -18,7 +18,7 @@
 void example_analysis()
 {
     std::string path="/pnfs/dune/scratch/users/jsoto/NDLAr_Run3/VBRscan_20260716/";
-    int run_number = 1130;
+    int run_number = 1275;
     try {
         std::cout << "Building run from path: " << path << " run number: " << run_number << "\n";
         ndlar_light::Run run(path, run_number);

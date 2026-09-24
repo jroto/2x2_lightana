@@ -182,93 +182,7 @@ public:
                << "\n";
         }
     }
-    /// Draw calibrated histograms and fits on a TCanvas, one pad per channel.
-    /// Pauses for user input via PauseExecution().
-    void  Draw(string mode="mean", bool NotPause=false, string pdfFile="") const
-    {
 
-        const bool drawMean = (mode == "mean");
-        const bool drawStd  = (mode == "std");
-
-        if (!drawMean && !drawStd) {
-            std::cerr << "BaselineCalibrator::Draw: mode must be \"mean\" or \"std\"; got \""
-                    << mode << "\".\n";
-            return;
-        }
-                std::vector<std::pair<int,int>> channels;
-        for (int adc = 0; adc < kNumADCs; ++adc)
-            for (int ch = 0; ch < kNumChannels; ++ch)
-                if (fHist[adc][ch] != nullptr)
-                    channels.emplace_back(adc, ch);
-
-        if (channels.empty()) {
-            std::cout << "BaselineCalibrator::Draw: no calibrated channels to draw.\n";
-            return;
-        }
-
-
-        gStyle->SetOptStat(0);
-
-        for (int adc = 0; adc < kNumADCs; ++adc)
-        {
-            const std::string canvasName  = "baseline_calibration_" + mode + "_"+ std::to_string(adc);
-            const std::string canvasTitle = "Baseline calibration (ADD "+std::to_string(adc)+"): " + mode + " per channel.";
-            TCanvas canvas(
-                canvasName.c_str(), canvasTitle.c_str(), 200, 10, 1400, 900
-            );
-            canvas.Divide(6, 8);
-            int padIdx=1;
-            for (int ch = 0; ch < kNumChannels; ++ch)
-            {
-                canvas.cd(padIdx++);
-                gPad->Clear();
-
-                TH1F* h = drawMean ? fHist[adc][ch] : fHist_std[adc][ch];
-                TF1*  f = drawMean ? fFit[adc][ch]  : fFit_std[adc][ch];
-
-                const ChannelBaseline& res = fResult[adc][ch];
-
-                // Draw histogram
-                h->SetLineColor(kBlue + 1);
-                h->SetLineWidth(1);
-                if(mode=="mean") h->GetXaxis()->SetTitle("Baseline mean (ADC)");
-                else h->GetXaxis()->SetTitle("Baseline std (ADC)");
-                h->GetYaxis()->SetTitle("Windows");
-                h->Draw("HIST");
-
-                // Overlay fit if it exists
-                if (f != nullptr) {
-                    f->SetLineColor(res.calibrated ? kRed : kOrange + 1);
-                    f->SetLineWidth(2);
-                    f->Draw("SAME");
-                }
-
-                // TPaveText: channel identity + fit result
-                TPaveText* pt = new TPaveText(0.55, 0.65, 0.98, 0.98, "NDC");
-                pt->SetFillColor(0);
-                pt->SetBorderSize(1);
-                pt->SetTextSize(0.05);
-                pt->AddText(Form("ADC %d / CH %d", adc, ch));
-                pt->AddText(Form("N windows: %zu", res.n_windows));
-                if (res.calibrated) {
-                    drawMean ? pt->AddText(Form("#mu = %.2f ADC", res.mean)) :
-                    pt->AddText(Form("#mu = %.2f ADC", res.STD));
-                    drawMean ? pt->AddText(Form("#sigma = %.2f ADC", res.sigma)) :
-                    pt->AddText(Form("#sigma = %.2f ADC", res.STD_sigma));
-                } else {
-                    pt->AddText("Fit FAILED");
-                    pt->AddText(Form("histo mean = %.2f", res.mean));
-                }
-                pt->Draw();
-
-                gPad->Update();
-            }
-            canvas.Update();
-
-            if(!NotPause) PauseExecution("Baseline calibration drawn | [Enter] continue   [q] quit: ");
-            if(!pdfFile.empty()) canvas.Print(pdfFile.c_str(), "pdf");
-        }
-    }
 
 private:
     CalibratorConfig fCfg;
@@ -345,12 +259,14 @@ private:
 
         double minVal = *std::min_element(samples.begin(), samples.end());
         double maxVal = *std::max_element(samples.begin(), samples.end());
+        double mean = std::accumulate(samples.begin(), samples.end(), 0.0) / samples.size();
+        double std = std::sqrt(std::accumulate(samples.begin(), samples.end(), 0.0, [mean](double acc, double x) {
+            return acc + (x - mean) * (x - mean);
+        }) / samples.size());
 
-        double loEdge = minVal - 1.0;
-        double hiEdge = maxVal + 1.0;
-        int nBins = std::max(20, static_cast<int>((maxVal - minVal) * 3));
-
-
+        double loEdge = mean - std*4;
+        double hiEdge = mean + std*4;
+        int nBins = std::max(20, static_cast<int>((hiEdge - loEdge) * 3));
 
         const std::string fname =
             isMean
@@ -520,15 +436,105 @@ private:
 
     }
         */
-    void PrintReport(string pdfFile) const
+
+    //Drawing tools:
+    void PrintReport(string pdfFile, bool NotPause=true) const
     {
-        DrawTGraph("mean",true,pdfFile+"(");
-        DrawTGraph("std",true,pdfFile);
-        Draw("mean",true,pdfFile);
-        Draw("std",true,pdfFile+")");
+        DrawTGraph("mean",NotPause,pdfFile+"(");
+        DrawTGraph("std",NotPause,pdfFile);
+        Draw("mean",NotPause,pdfFile);
+        Draw("std",NotPause,pdfFile);
+        TCanvas canvas("baseline_report_canvas_tgraph", "Baseline calibration report (TGraph)", 1400, 2200);
+        canvas.Print((pdfFile+")").c_str(), "pdf");
 
         std::cout << "Baseline calibration report written to: "
                 << pdfFile << "\n";
+    }
+    void  Draw(string mode="mean", bool NotPause=false, string pdfFile="") const
+    {
+
+        const bool drawMean = (mode == "mean");
+        const bool drawStd  = (mode == "std");
+
+        if (!drawMean && !drawStd) {
+            std::cerr << "BaselineCalibrator::Draw: mode must be \"mean\" or \"std\"; got \""
+                    << mode << "\".\n";
+            return;
+        }
+                std::vector<std::pair<int,int>> channels;
+        for (int adc = 0; adc < kNumADCs; ++adc)
+            for (int ch = 0; ch < kNumChannels; ++ch)
+                if (fHist[adc][ch] != nullptr)
+                    channels.emplace_back(adc, ch);
+
+        if (channels.empty()) {
+            std::cout << "BaselineCalibrator::Draw: no calibrated channels to draw.\n";
+            return;
+        }
+
+
+        gStyle->SetOptStat(0);
+
+        for (int adc = 0; adc < kNumADCs; ++adc)
+        {
+            const std::string canvasName  = "baseline_calibration_" + mode + "_"+ std::to_string(adc);
+            const std::string canvasTitle = "Baseline calibration (ADD "+std::to_string(adc)+"): " + mode + " per channel.";
+            TCanvas canvas(
+                canvasName.c_str(), canvasTitle.c_str(), 200, 10, 1400, 900
+            );
+            canvas.Divide(6, 8,0,0);
+            int padIdx=1;
+            for (int ch = 0; ch < kNumChannels; ++ch)
+            {
+                canvas.cd(padIdx);
+                if (fHist[adc][ch] == nullptr)
+                    continue;
+
+                TH1F* h = drawMean ? fHist[adc][ch] : fHist_std[adc][ch];
+                TF1*  f = drawMean ? fFit[adc][ch]  : fFit_std[adc][ch];
+
+                const ChannelBaseline& res = fResult[adc][ch];
+
+                // Draw histogram
+                h->SetLineColor(kBlue + 1);
+                h->SetLineWidth(1);
+                if(mode=="mean") h->GetXaxis()->SetTitle("Baseline mean (ADC)");
+                else h->GetXaxis()->SetTitle("Baseline std (ADC)");
+                h->GetYaxis()->SetTitle("Windows");
+                h->Draw("HIST");
+
+                // Overlay fit if it exists
+                if (f != nullptr) {
+                    f->SetLineColor(res.calibrated ? kRed : kOrange + 1);
+                    f->SetLineWidth(2);
+                    f->Draw("SAME");
+                }
+
+                // TPaveText: channel identity + fit result
+                TPaveText* pt = new TPaveText(0.55, 0.65, 0.98, 0.98, "NDC");
+                pt->SetFillColor(0);
+                pt->SetBorderSize(1);
+                pt->SetTextSize(0.05);
+                pt->AddText(Form("ADC %d / CH %d", adc, ch));
+                pt->AddText(Form("N windows: %zu", res.n_windows));
+                if (res.calibrated) {
+                    drawMean ? pt->AddText(Form("#mu = %.2f ADC", res.mean)) :
+                    pt->AddText(Form("#mu = %.2f ADC", res.STD));
+                    drawMean ? pt->AddText(Form("#sigma = %.2f ADC", res.sigma)) :
+                    pt->AddText(Form("#sigma = %.2f ADC", res.STD_sigma));
+                } else {
+                    pt->AddText("Fit FAILED");
+                    pt->AddText(Form("histo mean = %.2f", res.mean));
+                }
+                pt->Draw();
+                gPad->Update();
+                canvas.cd(padIdx++);
+            }
+            canvas.Update();
+
+            if(!NotPause) PauseExecution("Baseline calibration drawn | [Enter] continue   [q] quit: ");
+            if(!pdfFile.empty()) canvas.Print(pdfFile.c_str(), "pdf");
+        }
     }
     void DrawTGraph(string mode="mean", bool NotPause=false, string pdfFile="") const
     {
@@ -553,14 +559,16 @@ private:
             TH1F& hist = histograms[adc];
 
             const std::string histName =
-                "h_baseline_vs_channel_adc_" + std::to_string(adc);
+                "h_baseline_vs_channel_adc_" + std::to_string(adc) + mode;
 
             hist.SetName(histName.c_str());
-            hist.SetTitle(
+            drawMean ? hist.SetTitle(
                 Form("Baseline versus channel: ADC %d;Channel;Baseline (ADC counts)",
                     adc)
+            ) : hist.SetTitle(
+                Form("Baseline STD versus channel: ADC %d;Channel;Baseline STD (ADC counts)",
+                    adc)
             );
-
             // One bin per integer channel: channel 0 -> bin 1, ..., channel 63 -> bin 64.
             hist.SetBins(kNumChannels, -0.5, kNumChannels - 0.5);
             hist.SetStats(false);
@@ -590,6 +598,7 @@ private:
             }
 
             canvas.cd(adc + 1);
+            canvas.cd(adc + 1)->SetMargin(0.04, 0.01, 0.02, 0.01);
 
             gPad->SetGridx();
             gPad->SetGridy();
@@ -602,17 +611,18 @@ private:
 
             hist.GetXaxis()->SetNdivisions(kNumChannels / 4);
             hist.GetXaxis()->SetTitleSize(0.07);
-            hist.GetXaxis()->SetLabelSize(0.055);
+            hist.GetXaxis()->SetLabelSize(0.07);
 
             hist.GetYaxis()->SetTitleSize(0.07);
-            hist.GetYaxis()->SetLabelSize(0.055);
+            hist.GetYaxis()->SetLabelSize(0.07);
             hist.GetYaxis()->SetTitleOffset(0.60);
 
         }
 
         canvas.Modified();
         canvas.Update();
-        canvas.Print((pdfFile+"(").c_str(), "pdf");
+        if(!NotPause) PauseExecution("Baseline calibration drawn | [Enter] continue   [q] quit: ");
+        canvas.Print(pdfFile.c_str(), "pdf");
     }
 
 

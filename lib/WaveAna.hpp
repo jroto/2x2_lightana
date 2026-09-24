@@ -46,7 +46,8 @@ struct Hit {
 /// Tunable parameters for WaveAna.
 struct WaveAnaConfig {
     BaselineConfig baseline_cfg;         // passed to Baseline
-    double         threshold_adc = 5.0;  // hit threshold above baseline (tunable)
+    double threshold_adc = 5.0;  // hit threshold above baseline (tunable)
+    double threshold_SNRatio = 3.0; // times the baseline RMS noise (tunable)
 };
 
 /// Baseline + hit-finding analysis for a single waveform.
@@ -177,8 +178,16 @@ private:
                       << "no calibrated fallback for ADC " << fAdc << " CH " << fChannel
                       << " - defaulting overall_baseline to 0.\n";
         }
+        const double noiseStd =
+            (fallback != nullptr && std::isfinite(fallback->STD))
+                ? std::max(0.0, fallback->STD)
+                : 0.0;
 
-        FindHits(working, fOverallBaseline, cfg.threshold_adc);
+        const double threshold = std::max(
+            cfg.threshold_adc,
+            cfg.threshold_SNRatio * noiseStd
+        );
+        FindHits(working, fOverallBaseline, threshold);
 
         double totalCharge = 0.0;
         for (const auto& hit : fHits) totalCharge += hit.charge;
@@ -188,11 +197,11 @@ private:
         fParams[OverallBaselineIndex()] = fOverallBaseline;
     }
 
-    void FindHits(std::vector<double>& working, double baseline, double threshold_adc)
+    void FindHits( std::vector<double>& working, double baseline, double threshold)
     {
         const int N = static_cast<int>(working.size());
-        const double cut = baseline + 10.0;
-//        const double cut = baseline + threshold_adc;
+//        const double cut = baseline + 10.0;
+        const double cut = baseline + threshold;
 
         while (true) {
             int i_max = static_cast<int>(
@@ -201,10 +210,10 @@ private:
             if (working[i_max] <= cut) break; // no more hits
 
             int tick_start = i_max;
-            while (tick_start > 0 && working[tick_start - 1] > cut) --tick_start;
+            while (tick_start > 0 && working[tick_start - 1] > baseline + 10) --tick_start;
 
             int tick_end = i_max;
-            while (tick_end < N - 1 && working[tick_end + 1] > cut) ++tick_end;
+            while (tick_end < N - 1 && working[tick_end + 1] > baseline + 10) ++tick_end;
 
             double amplitude = working[i_max] - baseline;
             double charge = 0.0;
