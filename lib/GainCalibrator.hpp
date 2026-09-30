@@ -96,9 +96,13 @@ namespace ndlar_light {
                 return val;
             }
             static double GainEstimator(double voltage, int adc)
-            {
-                if(adc==0||adc==1) return 157*voltage-8232;
+            { //Cold:
+                if(adc==0||adc==1) return 667*voltage-30333;
                 else return 637*voltage-33119;
+// Warm:
+//                if(adc==0||adc==1) return 157*voltage-8232;
+//                else return 637*voltage-33119;
+//666,6666667	-30333,33333
             }
 
             double SigmaEstimator(double voltage, int adc)
@@ -933,8 +937,8 @@ namespace ndlar_light {
                 // --- 3. WaveAna configuration (NEW) ---
                 WaveAnaConfig wana_cfg;
                 wana_cfg.baseline_cfg   = cal_cfg.baseline_cfg; // reuse same baseline settings
-                wana_cfg.threshold_adc  = 300.0;                  // hit threshold above baseline
-                wana_cfg.threshold_SNRatio  = 5.0;             //  // times the baseline RMS noise (tunable)
+                wana_cfg.threshold_adc  = 200.0;                  // hit threshold above baseline
+                wana_cfg.threshold_SNRatio  = 3.0;             //  // times the baseline RMS noise (tunable)
 
                 // --- 4. Build Analysis with a WaveAna factory (NEW) ---
                 // The factory captures wana_cfg and the calibrator by reference.
