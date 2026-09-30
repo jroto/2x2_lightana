@@ -21,6 +21,7 @@
 #include "Baseline.hpp"
 #include "BaselineCalibrator.hpp"
 #include "WaveAna.hpp"
+#include "FFTWaveformAna.hpp"
 #include "EventAna.hpp"
 #include "Analysis.hpp"
 #include "GainCalibrator.hpp"

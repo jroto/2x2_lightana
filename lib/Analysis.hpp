@@ -14,6 +14,7 @@
 #include "Run.hpp"
 #include "WaveformAna.hpp"
 #include "WaveAna.hpp"
+#include "FFTWaveformAna.hpp"
 #include "Utils.hpp"
 #include "HistCollection.hpp"
 
@@ -28,6 +29,7 @@
 #include "TLine.h"
 #include "TBox.h"
 #include "TMarker.h"
+#include "TProfile.h"
 
 #include <cmath>
 #include <cstddef>
@@ -611,6 +613,257 @@ public:
         // Clean up charge histograms when done
         for (int i = 0; i < nSelected; ++i) {
             delete chargeHists[static_cast<std::size_t>(i)];
+        }
+    }
+
+    /// Interactive FFT event display with running-average FFT magnitude spectra.
+    ///
+    /// Layout: the canvas is divided into N columns × 2 rows, where N is the
+    /// number of selected channels.
+    ///
+    ///   Top row    (pads 1 .. N):     per-event waveform display, identical to
+    ///                                  Loop2 — waveform, baseline segments,
+    ///                                  hit boxes/markers, analysis parameters.
+    ///   Bottom row (pads N+1 .. 2N):  running-average FFT magnitude spectrum.
+    ///                                  One TProfile per selected channel,
+    ///                                  accumulating FFT bins from all events
+    ///                                  processed so far.
+    ///
+    /// Does not require process() to have been called first; resets the Run
+    /// internally.
+    ///
+    /// @param samplePeriod_ns  ADC hardware sampling period in nanoseconds
+    ///                         (default 16.0 ns for DAPHNE). Passed to
+    ///                         FFTWaveformAna constructor.
+    /// @param maxEvents        Maximum number of events to display (-1 = all).
+    ///
+    /// Navigation: [Enter] = next event, [q+Enter] = quit.
+    void LoopFFT(double samplePeriod_ns = 16.0, int maxEvents = -1)
+    {
+        // --- Snapshot selected channels once (ADC-major, channel-major) ---
+        const auto selectedChannels = fRun.GetSelectedChannels();
+
+        const int nSelected = static_cast<int>(selectedChannels.size());
+
+        if (nSelected == 0) {
+            std::cout << "Analysis::LoopFFT: no active channels in ChannelMap. "
+                      << "Use Run::SelectChannel() to activate channels.\n";
+            return;
+        }
+
+        // --- Create canvas: N columns × 2 rows ---
+        const int canvasWidth  = std::max(1200, 450 * nSelected);
+        const int canvasHeight = 900;
+
+        // Use a unique instance counter to avoid ROOT name clashes across calls.
+        static std::size_t sLoopFFTInstance = 0;
+        const std::size_t instance = sLoopFFTInstance++;
+
+        std::string cname = Form("LoopFFT_canvas_%zu", instance);
+        TCanvas* canvas = new TCanvas(cname.c_str(), "Analysis::LoopFFT",
+                                      200, 10, canvasWidth, canvasHeight);
+        canvas->Divide(nSelected, 2);
+        gStyle->SetOptStat(0);
+
+        // --- Persistent per-channel FFT TProfile histograms (one per selected ch) ---
+        // These are created lazily once we have the first valid FFT from each channel
+        // (to determine the frequency axis).
+        std::vector<TProfile*> fftProfiles(static_cast<std::size_t>(nSelected), nullptr);
+        std::vector<bool> profileCreated(static_cast<std::size_t>(nSelected), false);
+
+        // --- Reset run and iterate ---
+        fRun.Reset();
+        int eventCount = 0;
+        const ChannelMap& chmap   = fRun.GetChannelMap();
+        const auto& paramNames    = MetaWaveformAna::ParamNames();
+
+        while (fRun.HasNext()) {
+            if (maxEvents > 0 && eventCount >= maxEvents) break;
+
+            const Event& event = fRun.NextEvent();
+            ++eventCount;
+
+            // --- Top row: clear & redraw waveform pads (identical to Loop2) ---
+            for (int i = 0; i < nSelected; ++i) {
+                int adc = selectedChannels[static_cast<std::size_t>(i)].first;
+                int ch  = selectedChannels[static_cast<std::size_t>(i)].second;
+
+                canvas->cd(i + 1);  // top row: pads 1..N
+                gPad->Clear();
+
+                if (!event.IsValid(adc, ch)) {
+                    TPaveText* msg = new TPaveText(0.1, 0.4, 0.9, 0.6, "NDC");
+                    msg->AddText(Form("ADC %d / CH %d", adc, ch));
+                    msg->AddText("(inactive / invalid)");
+                    msg->SetFillColor(0);
+                    msg->SetTextColor(kGray + 1);
+                    msg->Draw();
+                    gPad->Update();
+                    continue;
+                }
+
+                const Waveform& wf = event.GetWaveform(adc, ch);
+                std::unique_ptr<MetaWaveformAna> ptr = fFactory(wf, true);
+                WaveAna* wa = dynamic_cast<WaveAna*>(ptr.get());
+
+                // Waveform histogram
+                std::string hname = Form("h_fft_adc%d_ch%d_ev%d_inst%zu",
+                                         adc, ch, eventCount, instance);
+                TH1F* h = new TH1F(hname.c_str(), "",
+                                    static_cast<int>(kNumSamples), 0,
+                                    static_cast<double>(kNumSamples));
+                for (int s = 0; s < static_cast<int>(kNumSamples); ++s)
+                    h->SetBinContent(s + 1, wf.GetSample(s));
+
+                const Channel& info = chmap.GetChannel(adc, ch);
+                std::string title = Form(
+                    "ADC %d / CH %d | TPC %d | trap: %s;Ticks;ADC counts",
+                    adc, ch, info.tpc, info.trap_type.c_str());
+                h->SetTitle(title.c_str());
+                h->SetLineColor(kBlue + 1);
+                h->Draw("HIST");
+
+                if (wa != nullptr) {
+                    // Baseline segments
+                    for (const auto& seg : wa->Baselines()) {
+                        TLine* line = new TLine(seg.tick_start, seg.mean,
+                                                seg.tick_end,   seg.mean);
+                        line->SetLineColor(kGreen + 2);
+                        line->SetLineWidth(2);
+                        line->Draw();
+                    }
+
+                    // Hit boxes and peak markers
+                    double baseline = wa->OverallBaseline();
+                    for (const auto& hit : wa->Hits()) {
+                        TBox* box = new TBox(hit.tick_start, baseline,
+                                              hit.tick_end,   baseline + hit.amplitude);
+                        box->SetFillColor(kRed);
+                        box->SetFillStyle(3003);
+                        box->Draw();
+
+                        TMarker* marker = new TMarker(
+                            hit.tick_peak,
+                            static_cast<double>(wf.GetSample(
+                                static_cast<std::size_t>(hit.tick_peak))),
+                            20);
+                        marker->SetMarkerColor(kRed);
+                        marker->Draw();
+                    }
+                }
+
+                // Analysis-parameter overlay
+                if (!paramNames.empty()) {
+                    TPaveText* pt = new TPaveText(0.55, 0.72, 0.98, 0.98, "NDC");
+                    pt->SetFillColor(0);
+                    pt->SetFillStyle(1001);
+                    pt->SetBorderSize(1);
+                    pt->SetTextSize(0.04);
+                    for (std::size_t p = 0; p < paramNames.size(); ++p) {
+                        if (ptr->HasParamIndex(p)) {
+                            std::string pline = Form("%s = %.4g",
+                                paramNames[p].c_str(),
+                                ptr->GetParamByIndex(p));
+                            pt->AddText(pline.c_str());
+                        }
+                    }
+                    pt->Draw();
+                }
+
+                gPad->Update();
+            }
+
+            // --- Bottom row: running-average FFT spectra ---
+            for (int i = 0; i < nSelected; ++i) {
+                int adc = selectedChannels[static_cast<std::size_t>(i)].first;
+                int ch  = selectedChannels[static_cast<std::size_t>(i)].second;
+
+                if (!event.IsValid(adc, ch)) continue;
+
+                const Waveform& wf = event.GetWaveform(adc, ch);
+
+                // Create FFT analyzer for this waveform
+                auto fftAna = std::make_unique<FFTWaveformAna>(wf, true, samplePeriod_ns);
+
+                // If this is the first valid FFT for this channel, create the TProfile
+                if (!profileCreated[static_cast<std::size_t>(i)]) {
+                    if (fftAna->NumFFTBins() > 0) {
+                        const auto& frequencies = fftAna->Frequencies();
+                        int nBins = fftAna->NumFFTBins();
+                        double xlow = frequencies[0];
+                        double xhigh = frequencies[nBins - 1];
+
+                        // Estimate bin width for last bin
+                        double binWidth = (nBins > 1) ? (frequencies[1] - frequencies[0]) : 0.1;
+                        xhigh += binWidth;
+
+                        std::string pname = Form("fft_prof_adc%d_ch%d_loopfft%zu",
+                                                 adc, ch, instance);
+                        TProfile* prof = new TProfile(
+                            pname.c_str(),
+                            Form("ADC %d / CH %d  avg FFT  (N=0);Frequency [MHz];Magnitude [ADC/bin]",
+                                 adc, ch),
+                            nBins, xlow, xhigh, "");
+                        prof->SetDirectory(nullptr);
+                        prof->SetLineColor(kBlue + 1);
+                        prof->SetFillColor(kAzure + 7);
+                        prof->SetFillStyle(1001);
+                        fftProfiles[static_cast<std::size_t>(i)] = prof;
+                        profileCreated[static_cast<std::size_t>(i)] = true;
+                    }
+                }
+
+                // Fill the TProfile with this event's FFT bins
+                if (fftProfiles[static_cast<std::size_t>(i)] != nullptr) {
+                    const auto& frequencies = fftAna->Frequencies();
+                    const auto& magnitudes = fftAna->Magnitudes();
+
+                    for (int k = 0; k < fftAna->NumFFTBins(); ++k) {
+                        fftProfiles[static_cast<std::size_t>(i)]->Fill(frequencies[k], magnitudes[k]);
+                    }
+
+                    // Update the title to show accumulated count
+                    int nEntries = static_cast<int>(fftProfiles[static_cast<std::size_t>(i)]->GetEntries());
+                    fftProfiles[static_cast<std::size_t>(i)]->SetTitle(
+                        Form("ADC %d / CH %d  avg FFT  (N=%d);Frequency [MHz];Magnitude [ADC/bin]",
+                             adc, ch, nEntries / fftAna->NumFFTBins())
+                    );
+                }
+            }
+
+            // --- Draw bottom row FFT profiles ---
+            for (int i = 0; i < nSelected; ++i) {
+                canvas->cd(nSelected + i + 1);  // bottom row: pads N+1..2N
+                gPad->Clear();
+
+                if (fftProfiles[static_cast<std::size_t>(i)] != nullptr) {
+                    fftProfiles[static_cast<std::size_t>(i)]->Draw("HIST");
+                }
+                gPad->Update();
+            }
+
+            // Canvas title
+            canvas->cd(0);
+            std::string canvasTitle = Form(
+                "LoopFFT | Event %d | ID %llu | [Enter] next | [q] quit",
+                eventCount,
+                static_cast<unsigned long long>(event.Meta().GetId()));
+            canvas->SetTitle(canvasTitle.c_str());
+            canvas->Update();
+
+            // Pause for user input (processes ROOT GUI events while waiting)
+            if (!PauseExecution("LoopFFT Event " + std::to_string(eventCount)
+                                + " | [Enter] next   [q] quit: "))
+                break;
+        }
+
+        std::cout << "Analysis::LoopFFT: finished after " << eventCount << " events.\n";
+
+        // Clean up FFT profiles when done
+        for (int i = 0; i < nSelected; ++i) {
+            if (fftProfiles[static_cast<std::size_t>(i)] != nullptr) {
+                delete fftProfiles[static_cast<std::size_t>(i)];
+            }
         }
     }
 
