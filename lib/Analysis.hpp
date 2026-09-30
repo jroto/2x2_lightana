@@ -616,18 +616,18 @@ public:
         }
     }
 
-    /// Interactive FFT event display with running-average FFT magnitude spectra.
+    /// Interactive FFT event display with optional notch filtering.
     ///
-    /// Layout: the canvas is divided into N columns × 2 rows, where N is the
-    /// number of selected channels.
+    /// When notch == nullptr (default):
+    ///   Layout: N columns × 2 rows, where N = number of selected channels.
+    ///   - Row 1 (pads 1..N):    per-event raw waveform
+    ///   - Row 2 (pads N+1..2N): running-average raw FFT spectrum
     ///
-    ///   Top row    (pads 1 .. N):     per-event waveform display, identical to
-    ///                                  Loop2 — waveform, baseline segments,
-    ///                                  hit boxes/markers, analysis parameters.
-    ///   Bottom row (pads N+1 .. 2N):  running-average FFT magnitude spectrum.
-    ///                                  One TProfile per selected channel,
-    ///                                  accumulating FFT bins from all events
-    ///                                  processed so far.
+    /// When notch != nullptr:
+    ///   Layout: N columns × 2 rows (same as above, but with filtering applied).
+    ///   - Row 1 (pads 1..N):    per-event raw waveform (unchanged)
+    ///   - Row 2 (pads N+1..2N): running-average FILTERED FFT spectrum
+    ///                           (notch frequencies suppressed)
     ///
     /// Does not require process() to have been called first; resets the Run
     /// internally.
@@ -636,9 +636,13 @@ public:
     ///                         (default 16.0 ns for DAPHNE). Passed to
     ///                         FFTWaveformAna constructor.
     /// @param maxEvents        Maximum number of events to display (-1 = all).
+    /// @param notch            Optional notch filter configuration. If nullptr,
+    ///                         shows raw FFT in row 2. If provided,
+    ///                         shows filtered FFT in row 2.
     ///
     /// Navigation: [Enter] = next event, [q+Enter] = quit.
-    void LoopFFT(double samplePeriod_ns = 16.0, int maxEvents = -1)
+    void LoopFFT(double samplePeriod_ns = 16.0, int maxEvents = -1,
+                 const NotchFilter* notch = nullptr)
     {
         // --- Snapshot selected channels once (ADC-major, channel-major) ---
         const auto selectedChannels = fRun.GetSelectedChannels();
@@ -652,6 +656,7 @@ public:
         }
 
         // --- Create canvas: N columns × 2 rows ---
+        // (Same layout whether notch is active or not)
         const int canvasWidth  = std::max(1200, 450 * nSelected);
         const int canvasHeight = 900;
 
@@ -665,9 +670,7 @@ public:
         canvas->Divide(nSelected, 2);
         gStyle->SetOptStat(0);
 
-        // --- Persistent per-channel FFT TProfile histograms (one per selected ch) ---
-        // These are created lazily once we have the first valid FFT from each channel
-        // (to determine the frequency axis).
+        // --- Persistent per-channel FFT TProfile histograms ---
         std::vector<TProfile*> fftProfiles(static_cast<std::size_t>(nSelected), nullptr);
         std::vector<bool> profileCreated(static_cast<std::size_t>(nSelected), false);
 
@@ -683,12 +686,12 @@ public:
             const Event& event = fRun.NextEvent();
             ++eventCount;
 
-            // --- Top row: clear & redraw waveform pads (identical to Loop2) ---
+            // --- Row 1: raw waveforms (top row, pads 1..N) ---
             for (int i = 0; i < nSelected; ++i) {
                 int adc = selectedChannels[static_cast<std::size_t>(i)].first;
                 int ch  = selectedChannels[static_cast<std::size_t>(i)].second;
 
-                canvas->cd(i + 1);  // top row: pads 1..N
+                canvas->cd(i + 1);  // Row 1, pad i+1
                 gPad->Clear();
 
                 if (!event.IsValid(adc, ch)) {
@@ -706,7 +709,7 @@ public:
                 std::unique_ptr<MetaWaveformAna> ptr = fFactory(wf, true);
                 WaveAna* wa = dynamic_cast<WaveAna*>(ptr.get());
 
-                // Waveform histogram
+                // Waveform histogram (raw)
                 std::string hname = Form("h_fft_adc%d_ch%d_ev%d_inst%zu",
                                          adc, ch, eventCount, instance);
                 TH1F* h = new TH1F(hname.c_str(), "",
@@ -773,7 +776,7 @@ public:
                 gPad->Update();
             }
 
-            // --- Bottom row: running-average FFT spectra ---
+            // --- Row 2: FFT profiles (raw or filtered depending on notch parameter) ---
             for (int i = 0; i < nSelected; ++i) {
                 int adc = selectedChannels[static_cast<std::size_t>(i)].first;
                 int ch  = selectedChannels[static_cast<std::size_t>(i)].second;
@@ -782,8 +785,10 @@ public:
 
                 const Waveform& wf = event.GetWaveform(adc, ch);
 
-                // Create FFT analyzer for this waveform
-                auto fftAna = std::make_unique<FFTWaveformAna>(wf, true, samplePeriod_ns);
+                // Create FFT analyzer (with or without notch filter)
+                auto fftAna = (notch != nullptr && !notch->frequencies_mhz.empty())
+                    ? std::make_unique<FFTWaveformAna>(wf, true, samplePeriod_ns, notch)
+                    : std::make_unique<FFTWaveformAna>(wf, true, samplePeriod_ns);
 
                 // If this is the first valid FFT for this channel, create the TProfile
                 if (!profileCreated[static_cast<std::size_t>(i)]) {
@@ -799,41 +804,48 @@ public:
 
                         std::string pname = Form("fft_prof_adc%d_ch%d_loopfft%zu",
                                                  adc, ch, instance);
+                        bool isFiltered = (notch != nullptr && !notch->frequencies_mhz.empty());
+                        std::string suffix = isFiltered ? " (filtered)" : "";
                         TProfile* prof = new TProfile(
                             pname.c_str(),
-                            Form("ADC %d / CH %d  avg FFT  (N=0);Frequency [MHz];Magnitude [ADC/bin]",
-                                 adc, ch),
+                            Form("ADC %d / CH %d  avg FFT%s  (N=0);Frequency [MHz];Magnitude [ADC/bin]",
+                                 adc, ch, suffix.c_str()),
                             nBins, xlow, xhigh, "");
                         prof->SetDirectory(nullptr);
-                        prof->SetLineColor(kBlue + 1);
-                        prof->SetFillColor(kAzure + 7);
+                        int lineColor = isFiltered ? (kOrange + 7) : (kBlue + 1);
+                        int fillColor = isFiltered ? (kOrange - 9) : (kAzure + 7);
+                        prof->SetLineColor(lineColor);
+                        prof->SetFillColor(fillColor);
                         prof->SetFillStyle(1001);
                         fftProfiles[static_cast<std::size_t>(i)] = prof;
                         profileCreated[static_cast<std::size_t>(i)] = true;
                     }
                 }
 
-                // Fill the TProfile with this event's FFT bins
+                // Fill the TProfile with this event's FFT bins (raw or filtered)
                 if (fftProfiles[static_cast<std::size_t>(i)] != nullptr) {
                     const auto& frequencies = fftAna->Frequencies();
-                    const auto& magnitudes = fftAna->Magnitudes();
+                    bool isFiltered = (notch != nullptr && !notch->frequencies_mhz.empty());
+                    const auto& magnitudes = isFiltered ? fftAna->FilteredMagnitudes() : fftAna->Magnitudes();
 
-                    for (int k = 0; k < fftAna->NumFFTBins(); ++k) {
+                    for (int k = 0; k < static_cast<int>(magnitudes.size()); ++k) {
                         fftProfiles[static_cast<std::size_t>(i)]->Fill(frequencies[k], magnitudes[k]);
                     }
 
                     // Update the title to show accumulated count
                     int nEntries = static_cast<int>(fftProfiles[static_cast<std::size_t>(i)]->GetEntries());
+                    bool isFilt = (notch != nullptr && !notch->frequencies_mhz.empty());
+                    std::string sufx = isFilt ? " (filtered)" : "";
                     fftProfiles[static_cast<std::size_t>(i)]->SetTitle(
-                        Form("ADC %d / CH %d  avg FFT  (N=%d);Frequency [MHz];Magnitude [ADC/bin]",
-                             adc, ch, nEntries / fftAna->NumFFTBins())
+                        Form("ADC %d / CH %d  avg FFT%s  (N=%d);Frequency [MHz];Magnitude [ADC/bin]",
+                             adc, ch, sufx.c_str(), nEntries / fftAna->NumFFTBins())
                     );
                 }
             }
 
-            // --- Draw bottom row FFT profiles ---
+            // Draw row 2 (FFT profiles) on canvas
             for (int i = 0; i < nSelected; ++i) {
-                canvas->cd(nSelected + i + 1);  // bottom row: pads N+1..2N
+                canvas->cd(nSelected + i + 1);  // Row 2, pad N+i+1
                 gPad->Clear();
 
                 if (fftProfiles[static_cast<std::size_t>(i)] != nullptr) {
