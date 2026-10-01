@@ -97,7 +97,7 @@ namespace ndlar_light {
             }
             static double GainEstimator(double voltage, int adc)
             { //Cold:
-                if(adc==0||adc==1) return 667*voltage-30333;
+                if(adc==0||adc==1) return 590*voltage-26283;
                 else return 637*voltage-33119;
 // Warm:
 //                if(adc==0||adc==1) return 157*voltage-8232;
@@ -593,7 +593,11 @@ namespace ndlar_light {
                         << pars.ngaus << " " << pars.gain << " " << pars.sigma << "\n";
             }
             outfile.close();
-        }  
+        }
+        string kOutputFolder = "./";
+        void SetOutputFolder(const std::string& folder) {
+            kOutputFolder = folder;
+        }
         GainCalibrator(Run* r, double v) : fRun(r), fVoltage (v) {
             std::cout << "GainCalibrator on run "<< fRun->RunNumber()<<"\n";
             fSelectedChannels = fRun->GetSelectedChannels();

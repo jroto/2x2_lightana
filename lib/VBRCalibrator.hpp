@@ -51,6 +51,14 @@ namespace ndlar_light {
             */
             kVBRFitsFile = Form("%s_vbrFits.root", filename.c_str());
         }
+        string kOutputFolder=".";
+        void SetOutputFolder(std::string folder) {
+            kOutputFolder = folder;
+
+            for (auto& gain_calibrator : fGainCalibrators) {
+                gain_calibrator.SetOutputFolder(folder);
+            }
+        }
         void Process(std::string outfile="outfile.root")
         {
 //            ProcessSPEHist(); //loop over all runs.

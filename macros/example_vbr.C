@@ -4,7 +4,8 @@
 void example_vbr()
 {
 
-        ndlar_light::VBRCalibrator vbr_calibrator("data/vbr_calibration1.csv");
+        ndlar_light::VBRCalibrator vbr_calibrator("data/vbr_calibration_cold_mo123.csv");
+        vbr_calibrator.SetOutputFolder("Results/VBRCalib/MOD123/");
 //          vbr_calibrator.ResetChannels();
 //        vbr_calibrator.SelectChannel(0,4);
 //        vbr_calibrator.SelectChannel(0,5);

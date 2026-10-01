@@ -25,5 +25,6 @@
 #include "FFTWaveformAna.hpp"
 #include "EventAna.hpp"
 #include "Analysis.hpp"
+#include "AnalysisFFT.hpp"
 #include "GainCalibrator.hpp"
 #include "VBRCalibrator.hpp"

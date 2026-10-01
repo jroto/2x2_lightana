@@ -1,13 +1,13 @@
 //
-// fft_notch.cpp
+// fft_notch.C
 //
 // Example macro demonstrating LoopFFT with notch filtering.
-// Shows raw waveforms and FFT spectra in top two rows,
-// and filtered waveforms and filtered FFT spectra in bottom two rows.
+// Shows raw waveforms and FFT spectra in top rows,
+// and filtered waveforms and filtered FFT spectra in bottom rows (4-row layout).
 //
 // Usage:
 //   source ../Setup.sh
-//   root -l -q fft_notch.cpp
+//   root -l -q fft_notch.C
 //
 
 #include "../lib/NDLArLight.hpp"
@@ -24,21 +24,28 @@ void fft_notch() {
     run.ResetChannels(false);
     run.SelectChannel(0, 4, true);
     run.SelectChannel(0, 5, true);
+    run.SelectChannel(1, 20, true);
 
     // --- Configure notch filter ---
     // Suppress known noise lines (e.g., clock harmonics or power-line noise)
     ndlar_light::NotchFilter notch;
-    notch.frequencies_mhz = {1.5625, 3.125};  // Example: clock harmonics at these frequencies
-    notch.half_width_mhz  = 0.3;              // ±0.3 MHz around each centre
+    notch.frequencies_mhz = {10.0, 20.0,25.0,30.0};  // Example: clock harmonics at these frequencies
+    notch.half_width_mhz  = 0.1;              // ±0.3 MHz around each centre
 
-    // --- Create analysis object ---
-    ndlar_light::Analysis ana(run);
+    // --- Create AnalysisFFT object with notch filtering ---
+    // This overrides Loop() to call LoopFFT() internally with the notch filter.
+    ndlar_light::AnalysisFFT ana(run, 16.0, &notch);
 
-    // --- Launch interactive LoopFFT display with notch filtering ---
-    // Arguments:
-    //   samplePeriod_ns = 16.0 ns (ADC sampling period for DAPHNE)
-    //   maxEvents = 50 (show at most 50 events)
-    //   &notch = notch filter configuration (pointer)
-    ana.LoopFFT(16.0, 50, &notch);
+    // --- Launch interactive FFT display ---
+    // The Loop() call here will invoke LoopFFT() with 4-row layout:
+    // Row 1: raw waveform, Row 2: filtered waveform,
+    // Row 3: raw FFT spectrum, Row 4: filtered FFT spectrum.
+    ana.Loop(500);
+
+    // --- Alternative: using the old-style API (equivalent) ---
+    // ndlar_light::Analysis ana_old(run);
+    // ana_old.LoopFFT(16.0, 50, &notch);
 }
+
+
 

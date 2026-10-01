@@ -17,6 +17,7 @@
 #include "NotchFilter.hpp"
 
 #include "TVirtualFFT.h"
+#include "TComplex.h"
 
 #include <cmath>
 #include <iomanip>
@@ -258,11 +259,25 @@ private:
             // Compute filtered one-sided magnitude spectrum
             ComputeOneSidedSpectrum(filteredRe, filteredIm, N, fFilteredMagnitudes, fFrequencies);
 
-            // For the filtered time-domain waveform: we would need to inverse-transform
-            // the notched complex data. However, ROOT's TVirtualFFT C2R is complex to use.
-            // Instead, we leave fFilteredSamples empty - the display focuses on the
-            // filtered FFT spectrum (row 4), which is the main goal of notch filtering.
-            // Row 2 will show as inactive/empty when HasFilteredWaveform() returns false.
+            // Inverse transform via a direct C++ inverse DFT (N = 600, cheap).
+            // Avoids a second TVirtualFFT instance, which conflicts with the
+            // forward plan. x[n] = (1/N) * sum_k X[k] exp(+2*pi*i*k*n/N).
+            // The notch is symmetric, so the result is real.
+            std::vector<double> cosT(N), sinT(N);
+            const double twoPiOverN = 2.0 * 3.14159265358979323846 / static_cast<double>(N);
+            for (int m = 0; m < N; ++m) {
+                cosT[m] = std::cos(twoPiOverN * m);
+                sinT[m] = std::sin(twoPiOverN * m);
+            }
+            fFilteredSamples.assign(N, 0.0);
+            for (int n = 0; n < N; ++n) {
+                double acc = 0.0;
+                for (int k = 0; k < N; ++k) {
+                    const int m = static_cast<int>((static_cast<long long>(k) * n) % N);
+                    acc += filteredRe[k] * cosT[m] - filteredIm[k] * sinT[m];
+                }
+                fFilteredSamples[n] = acc / static_cast<double>(N) + dcOffset;
+            }
         }
 
         delete fft;
